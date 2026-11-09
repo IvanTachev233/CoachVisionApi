@@ -1,0 +1,8 @@
+# gitleaks reads this from the repo root: the default rules, plus skipping local
+# virtual environments so that `gitleaks dir .` looks only at this project's files.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local virtual environments, ignored by git"
+paths = ['''(^|/)\.venv/''']

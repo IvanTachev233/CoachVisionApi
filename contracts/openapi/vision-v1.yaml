@@ -1,0 +1,1466 @@
+openapi: 3.1.1
+info:
+  title: Vision API
+  version: 1.0.0-draft.3
+  summary: Lift video analysis for apps that track strength training.
+  description: |
+    Vision analyses short lift videos and returns bar path, bar velocity,
+    rep count and verification checks, each with a confidence or an explicit
+    `unanalysable` outcome with a reason.
+
+    **Draft (V0b, 2026-11-08; additions V0c, 2026-11-09).** Written from ADR 0017 (Vision as a product,
+    LiftBig its first tenant) and its V0 decision. It moves to the Vision
+    repository's `contracts/` when that repository is created (V1). The
+    product name and host are not decided yet (ADR 0016), so "Vision" and the
+    server URL are placeholders.
+
+    ## Flow
+
+    1. `POST /v1/jobs` creates a job and returns a short-lived upload URL.
+    2. The client uploads the video to that URL: with a single `PUT` or, when
+       the job asked for `video.uploadMode: resumable`, in a session it can
+       continue after a lost connection (see `ResumableUpload`).
+    3. Analysis starts when the upload completes. The job moves from
+       `awaiting_upload` to `queued`, `processing`, then `completed` or `failed`.
+    4. Vision sends a signed `job.completed` or `job.failed` webhook; the
+       tenant then reads the results with `GET /v1/jobs/{jobId}`. Polling
+       works too.
+    5. A `completed` job also returns `playback`, a short-lived URL for the
+       video. The tenant can send its end user's opinion of the result with
+       `POST /v1/jobs/{jobId}/labels`.
+
+    ## Compatibility
+
+    `/v1/` changes are additive only: new optional request fields, new
+    response fields, new features, new reason codes and new event types.
+    Response schemas therefore stay open (no `additionalProperties: false`).
+    Clients must ignore response fields they don't know and treat an unknown
+    reason code like a known one they can't act on. A breaking change means
+    `/v2/`. Every job carries `schemaVersion`, and every feature result
+    carries the `modelVersion` that produced it.
+
+    ## Data
+
+    Vision never receives the tenant's user accounts. `subjectId` is the
+    tenant's opaque id for one end user, used only to delete that user's
+    data (`DELETE /v1/subjects/{subjectId}`). Videos are used for training
+    only while the job's `trainingAllowed` is true;
+    `POST /v1/subjects/{subjectId}/training-withdrawal` turns it off for all
+    of a subject's jobs.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+  contact:
+    name: Ivan Tachev
+    url: https://github.com/IvanTachev233
+servers:
+  - url: https://vision-api.invalid
+    description: Placeholder; the host is chosen with the product name (ADR 0016).
+security:
+  - tenantApiKey: []
+tags:
+  - name: Jobs
+    description: Create an analysis job, upload its video, read its results and delete it.
+  - name: Subjects
+    description: Withdraw training permission for one of the tenant's end users, or delete everything Vision holds for them.
+paths:
+  /v1/jobs:
+    post:
+      tags: [Jobs]
+      operationId: createJob
+      summary: Create an analysis job
+      description: |
+        Creates a job in `awaiting_upload` and returns a signed URL for the
+        video. Nothing is analysed or billed until the upload completes. A
+        job whose video isn't uploaded before `upload.expiresAt` fails with
+        `upload_expired`.
+
+        Send an `Idempotency-Key` to retry safely: the same key with the same
+        body within 24 hours returns the original job (and a fresh upload URL
+        while it is still awaiting upload, or the same session for a
+        resumable upload, so its progress is kept); the same key with a
+        different body is a `409`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+            examples:
+              squat:
+                summary: A squat set, all v1 features
+                value:
+                  lift: squat
+                  features: [bar_path, velocity, rep_count, verification_checks]
+                  subjectId: sub_7f3c9a12
+                  trainingAllowed: false
+                  equipment:
+                    plateDiameterMm: 450
+                  video:
+                    contentType: video/mp4
+                    sizeBytes: 18874368
+                  clientReference: set_48213
+              resumable:
+                summary: A squat set with a resumable upload
+                value:
+                  lift: squat
+                  features: [bar_path, velocity, rep_count, verification_checks]
+                  subjectId: sub_7f3c9a12
+                  trainingAllowed: false
+                  video:
+                    contentType: video/mp4
+                    sizeBytes: 157286400
+                    uploadMode: resumable
+                  clientReference: set_48220
+      responses:
+        '201':
+          description: The job was created; upload the video to `upload.url`.
+          headers:
+            Location:
+              description: The job's address.
+              schema:
+                type: string
+                format: uri-reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedJob'
+              examples:
+                created:
+                  $ref: '#/components/examples/CreatedJob'
+                resumable:
+                  $ref: '#/components/examples/CreatedJobResumable'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '413':
+          $ref: '#/components/responses/VideoTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /v1/jobs/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Get a job and its results
+      description: |
+        Returns the job's status and, once `completed`, one result per
+        requested feature. Each result is either `analysed` (with a
+        confidence) or `unanalysable` (with a reason). A `completed` job
+        also has `playback`, with a new short-lived URL on every read.
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              examples:
+                completed:
+                  $ref: '#/components/examples/CompletedJob'
+                unanalysable:
+                  $ref: '#/components/examples/UnanalysableJob'
+                failed:
+                  $ref: '#/components/examples/FailedJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    delete:
+      tags: [Jobs]
+      operationId: deleteJob
+      summary: Delete a job
+      description: |
+        Deletes the job's video, raw outputs, results and label. From the response
+        on, the job is never served again (`404`); removal from storage
+        finishes asynchronously. A usage record without content (tenant,
+        features analysed, time) is kept for billing. Deleting a job that
+        is already deleted, or never existed, is also a `404`.
+      responses:
+        '204':
+          description: The job is deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /v1/jobs/{jobId}/labels:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    post:
+      tags: [Jobs]
+      operationId: labelJob
+      summary: Record whether a job's result was right
+      description: |
+        Stores the end user's opinion of a `completed` job's result. A job
+        has one label: a new `POST` replaces it, so the user can change
+        their answer, and repeating a request is safe.
+
+        A label doesn't change the results or what is billed. Labels are
+        used to measure accuracy, and for training only together with a
+        video whose `trainingAllowed` is true. A label is deleted with its
+        job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobLabelRequest'
+            examples:
+              correct:
+                summary: The result was right
+                value:
+                  assessment: correct
+              incorrect:
+                summary: The result was wrong, with a reason
+                value:
+                  assessment: incorrect
+                  reason: wrong_rep_count
+      responses:
+        '200':
+          description: The label is stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobLabel'
+              examples:
+                incorrect:
+                  summary: The stored label
+                  value:
+                    jobId: job_01JC8YX4D2F7H1K9M3P5Q8S0TV
+                    assessment: incorrect
+                    reason: wrong_rep_count
+                    updatedAt: '2026-11-08T18:02:44Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/JobNotCompleted'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /v1/subjects/{subjectId}:
+    parameters:
+      - $ref: '#/components/parameters/SubjectId'
+    delete:
+      tags: [Subjects]
+      operationId: deleteSubject
+      summary: Delete everything for one end user
+      description: |
+        Deletes every job of this `subjectId` for the calling tenant, as
+        `DELETE /v1/jobs/{jobId}` would, including jobs still awaiting
+        upload or processing (they are cancelled). Videos already used for
+        training under `trainingAllowed: true` are removed from future
+        training sets. Idempotent: a subject with no jobs also returns `204`.
+      responses:
+        '204':
+          description: The subject's jobs are deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /v1/subjects/{subjectId}/training-withdrawal:
+    parameters:
+      - $ref: '#/components/parameters/SubjectId'
+    post:
+      tags: [Subjects]
+      operationId: withdrawSubjectTraining
+      summary: Withdraw training permission for one end user
+      description: |
+        Sets `trainingAllowed` to false on every job this subject has now
+        and keeps those videos, and what was measured from them, out of
+        every later training set. Models already trained are not changed.
+        The videos stay available for results and playback until they are
+        deleted.
+
+        This only withdraws. A later job created with `trainingAllowed: true`
+        is eligible on its own terms; no call turns older jobs back on.
+        Idempotent: a subject with nothing left to change returns `200`
+        with `jobsUpdated: 0`.
+      responses:
+        '200':
+          description: The permission is withdrawn.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingWithdrawal'
+              examples:
+                withdrawn:
+                  summary: Three jobs changed
+                  value:
+                    subjectId: sub_7f3c9a12
+                    jobsUpdated: 3
+                    withdrawnAt: '2026-11-09T08:30:12Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+webhooks:
+  job.completed:
+    post:
+      tags: [Jobs]
+      operationId: onJobCompleted
+      summary: A job completed
+      description: |
+        Sent when a job reaches `completed`. The event carries ids only;
+        read the results with `GET /v1/jobs/{jobId}`. A completed job can
+        still have `unanalysable` features.
+
+        **Signature.** Each delivery has a `Vision-Signature` header,
+        `t=<unix seconds>,v1=<hex>`, where `<hex>` is the HMAC-SHA256 of
+        `<t>.<raw request body>` with the tenant's webhook secret. Verify it
+        over the raw bytes before parsing, compare in constant time, and
+        reject a `t` more than 5 minutes from your clock. During a secret
+        rotation a header may carry two `v1=` values; accept either.
+
+        **Delivery.** At least once: a delivery that gets no `2xx` within 10
+        seconds is retried with backoff for up to 24 hours, so deduplicate on
+        `id`. Order is not guaranteed. The endpoint URL and secret are set
+        per tenant outside this API in v1.
+      parameters:
+        - $ref: '#/components/parameters/WebhookSignature'
+        - $ref: '#/components/parameters/WebhookEventId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobEvent'
+            examples:
+              completed:
+                summary: Job completed
+                value:
+                  id: evt_01JC8ZK2Q7T4M9V3X6B0N5R8WD
+                  type: job.completed
+                  createdAt: '2026-11-08T10:15:42Z'
+                  data:
+                    jobId: job_01JC8YX4D2F7H1K9M3P5Q8S0TV
+                    status: completed
+                    subjectId: sub_7f3c9a12
+                    clientReference: set_48213
+      responses:
+        '200':
+          description: Received. Any `2xx` stops retries.
+        '400':
+          description: The tenant rejected the delivery (for example a bad signature); Vision retries it.
+  job.failed:
+    post:
+      tags: [Jobs]
+      operationId: onJobFailed
+      summary: A job failed
+      description: |
+        Sent when a job reaches `failed` (the video never arrived, couldn't
+        be read, or processing failed after retries). Same signature and
+        delivery rules as `job.completed`; `GET /v1/jobs/{jobId}` gives the
+        `failure` reason.
+      parameters:
+        - $ref: '#/components/parameters/WebhookSignature'
+        - $ref: '#/components/parameters/WebhookEventId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobEvent'
+            examples:
+              failed:
+                summary: Job failed
+                value:
+                  id: evt_01JC90A1B2C3D4E5F6G7H8J9KM
+                  type: job.failed
+                  createdAt: '2026-11-08T11:02:10Z'
+                  data:
+                    jobId: job_01JC8ZZ9W8V7X6T5S4R3Q2P1NM
+                    status: failed
+                    subjectId: sub_7f3c9a12
+                    clientReference: set_48217
+      responses:
+        '200':
+          description: Received. Any `2xx` stops retries.
+        '400':
+          description: The tenant rejected the delivery (for example a bad signature); Vision retries it.
+components:
+  securitySchemes:
+    tenantApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        The tenant's secret API key, sent as `Authorization: Bearer <key>`.
+        Keys are issued per tenant and environment and are used from the
+        tenant's backend only, never from an app on a user's device.
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: The job's id, as returned by `createJob`.
+      schema:
+        $ref: '#/components/schemas/JobId'
+    SubjectId:
+      name: subjectId
+      in: path
+      required: true
+      description: The tenant's opaque id for one end user.
+      schema:
+        $ref: '#/components/schemas/SubjectId'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: A unique key per intended job (a UUID works), kept for 24 hours.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    WebhookSignature:
+      name: Vision-Signature
+      in: header
+      required: true
+      description: '`t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">`; see the event description.'
+      schema:
+        type: string
+        pattern: '^t=[0-9]+(,v1=[0-9a-f]{64})+$'
+    WebhookEventId:
+      name: Vision-Event-Id
+      in: header
+      required: true
+      description: The event's `id`, repeated as a header for deduplication before parsing.
+      schema:
+        $ref: '#/components/schemas/EventId'
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    BadRequest:
+      description: The request is malformed (invalid JSON, a missing or wrongly typed field, an unknown feature).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/invalid-request
+            title: Invalid request
+            status: 400
+            code: invalid_request
+            detail: 'features[1]: "tempo" is not a feature.'
+            errors:
+              - pointer: /features/1
+                detail: '"tempo" is not a feature.'
+    Unauthorized:
+      description: The API key is missing, unknown or revoked.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/unauthorized
+            title: Unauthorized
+            status: 401
+            code: unauthorized
+    NotFound:
+      description: No such job for this tenant (it never existed, belongs to another tenant, or was deleted).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/not-found
+            title: Not found
+            status: 404
+            code: not_found
+    IdempotencyConflict:
+      description: The `Idempotency-Key` was already used with a different request body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/idempotency-conflict
+            title: Idempotency key reused
+            status: 409
+            code: idempotency_conflict
+    JobNotCompleted:
+      description: The job isn't `completed`, so there is no result to label.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/job-not-completed
+            title: Job not completed
+            status: 409
+            code: job_not_completed
+    VideoTooLarge:
+      description: '`video.sizeBytes` is over the limit.'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/video-too-large
+            title: Video too large
+            status: 413
+            code: video_too_large
+            detail: The limit is 209715200 bytes.
+    Unprocessable:
+      description: The request is well formed but can't be accepted (for example a content type Vision doesn't read).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/unsupported-video
+            title: Unsupported video type
+            status: 422
+            code: unsupported_video
+            detail: Use video/mp4 or video/quicktime.
+    TooManyRequests:
+      description: The tenant's rate limit or quota is reached.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://vision-api.invalid/problems/rate-limited
+            title: Too many requests
+            status: 429
+            code: rate_limited
+  schemas:
+    JobId:
+      type: string
+      description: Vision's job id.
+      pattern: '^job_[0-9A-HJKMNP-TV-Z]{26}$'
+      examples: [job_01JC8YX4D2F7H1K9M3P5Q8S0TV]
+    EventId:
+      type: string
+      description: The webhook event's id, unique per event (retries reuse it).
+      pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+      examples: [evt_01JC8ZK2Q7T4M9V3X6B0N5R8WD]
+    SubjectId:
+      type: string
+      description: |
+        The tenant's opaque id for one end user, so the tenant can delete all
+        of that user's data. Must not be or contain personal data (no email
+        address, name or phone number); a random or hashed id is expected.
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+      examples: [sub_7f3c9a12]
+    Lift:
+      type: string
+      description: |
+        The lift in the video. Every lift a tenant may log is accepted, but in
+        v1 only `squat` is analysed; for the others each feature comes back
+        `unanalysable` with `lift_not_supported` until that lift is validated.
+        New values may be added.
+      enum: [squat, bench_press, deadlift, overhead_press, other]
+    Feature:
+      type: string
+      description: |
+        An analysis to run. `verification_checks` runs the checks that exist
+        for the lift (in v1, `squat_depth` for the squat). New features may be
+        added.
+      enum: [bar_path, velocity, rep_count, verification_checks]
+    JobStatus:
+      type: string
+      description: |
+        `awaiting_upload`: created, waiting for the video. `queued`: the video
+        arrived. `processing`: being analysed. `completed`: results are ready
+        (a feature may still be `unanalysable`). `failed`: no results; see
+        `failure`.
+      enum: [awaiting_upload, queued, processing, completed, failed]
+    ReasonCode:
+      type: string
+      description: |
+        Why a feature or job has no result. Known values:
+        `lift_not_supported` (the lift isn't analysed yet),
+        `plates_not_found` (no plate found in enough frames to scale or track
+        the bar; v1 detects red and blue bumper plates only),
+        `pose_not_found` (the lifter's body isn't visible enough),
+        `no_reps_detected`,
+        `low_confidence` (a result was produced but below Vision's minimum
+        confidence, so it is withheld),
+        `camera_moved`,
+        `video_unreadable`, `video_too_long`, `upload_expired`,
+        `processing_error`. New values may be added; treat an unknown one as
+        "no result, not retryable".
+      pattern: '^[a-z][a-z0-9_]{1,63}$'
+      examples: [plates_not_found]
+    CreateJobRequest:
+      type: object
+      description: A request to analyse one video of one set.
+      additionalProperties: false
+      required: [lift, features, subjectId, trainingAllowed, video]
+      properties:
+        lift:
+          $ref: '#/components/schemas/Lift'
+        features:
+          type: array
+          description: The analyses to run. Each is billed only if it comes back `analysed`.
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Feature'
+        subjectId:
+          $ref: '#/components/schemas/SubjectId'
+        trainingAllowed:
+          type: boolean
+          description: |
+            Whether this end user consented to their video being used to
+            improve Vision's models. Required, with no default, so the tenant
+            states it on every job.
+        equipment:
+          $ref: '#/components/schemas/Equipment'
+        video:
+          $ref: '#/components/schemas/VideoDeclaration'
+        clientReference:
+          type: string
+          description: |
+            The tenant's own reference (for example its set id), returned on
+            the job and in webhooks. Opaque to Vision; must not contain
+            personal data.
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+    Equipment:
+      type: object
+      description: What is on the bar, used to turn pixels into metres.
+      properties:
+        plateDiameterMm:
+          type: integer
+          description: |
+            Outer diameter of the largest plates, in millimetres. Velocity and
+            bar path are scaled from the plate's size in the frame. Defaults
+            to 450, the standard bumper plate diameter.
+          minimum: 200
+          maximum: 500
+          default: 450
+    VideoDeclaration:
+      type: object
+      description: The video the client will upload, so the signed URL can be bound to its type and size.
+      additionalProperties: false
+      required: [contentType, sizeBytes]
+      properties:
+        contentType:
+          type: string
+          description: The video's media type; the upload must send the same `Content-Type`.
+          enum: [video/mp4, video/quicktime]
+        sizeBytes:
+          type: integer
+          description: The exact size of the file to upload, in bytes. At most 200 MiB in v1.
+          minimum: 1
+          maximum: 209715200
+        uploadMode:
+          type: string
+          description: |
+            `single` returns a URL for one `PUT` of the whole file. `resumable`
+            returns a session that can continue after a lost connection or an
+            app restart. New values may be added.
+          enum: [single, resumable]
+          default: single
+    Upload:
+      description: Where and how to upload the video. Only returned while the job is `awaiting_upload`.
+      oneOf:
+        - $ref: '#/components/schemas/SingleUpload'
+        - $ref: '#/components/schemas/ResumableUpload'
+      discriminator:
+        propertyName: mode
+        mapping:
+          single: '#/components/schemas/SingleUpload'
+          resumable: '#/components/schemas/ResumableUpload'
+    ResumableUpload:
+      type: object
+      description: |
+        A session bound to the declared content type and size. Vision starts
+        it, so the client only sends bytes:
+
+        1. `PUT` the bytes from `offset` to `url`, with
+           `Content-Range: bytes <offset>-<last byte>/<sizeBytes>`. Start with
+           `offset` 0. Every chunk except the last must be a multiple of
+           `chunkMultipleBytes`; the whole rest of the file in one request is
+           fine.
+        2. `200` or `201` means the upload is complete. `308` means more is
+           expected.
+        3. After a lost connection or a restart, ask how far it got: `PUT` to
+           `url` with `Content-Length: 0` and `Content-Range: bytes */*`. A
+           `308` with `Range: bytes=0-<end>` means continue from `offset`
+           `<end> + 1`. A `308` with no `Range` header means nothing was
+           stored, so start from 0.
+      required: [mode, method, url, chunkMultipleBytes, expiresAt]
+      properties:
+        mode:
+          type: string
+          description: Always `resumable`.
+          const: resumable
+        method:
+          type: string
+          description: The HTTP method for every request to the session.
+          const: PUT
+        url:
+          type: string
+          format: uri
+          description: The session URL. Treat it as a secret; it works for anyone until it expires.
+        chunkMultipleBytes:
+          type: integer
+          description: Every chunk except the last must be a multiple of this many bytes.
+          minimum: 1
+        expiresAt:
+          type: string
+          format: date-time
+          description: |
+            When the session stops working; the job then fails with
+            `upload_expired`. Stored bytes are kept until then.
+    SingleUpload:
+      type: object
+      description: One `PUT` of the whole file.
+      required: [mode, method, url, headers, expiresAt]
+      properties:
+        mode:
+          type: string
+          description: Always `single`.
+          const: single
+        method:
+          type: string
+          description: The HTTP method for the upload.
+          const: PUT
+        url:
+          type: string
+          format: uri
+          description: The signed URL. Treat it as a secret; it works for anyone until it expires.
+        headers:
+          type: object
+          description: Headers the upload must send exactly as given.
+          additionalProperties:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the URL stops working; the job then fails with `upload_expired`.
+    Job:
+      type: object
+      description: An analysis job.
+      required: [id, status, schemaVersion, lift, features, subjectId, trainingAllowed, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/JobId'
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        schemaVersion:
+          type: string
+          description: The result format version, `1.<minor>` for every `/v1/` job.
+          pattern: '^1\.[0-9]+$'
+        lift:
+          $ref: '#/components/schemas/Lift'
+        features:
+          type: array
+          description: The features requested.
+          items:
+            $ref: '#/components/schemas/Feature'
+        subjectId:
+          $ref: '#/components/schemas/SubjectId'
+        trainingAllowed:
+          type: boolean
+          description: As sent when the job was created, or false once training permission is withdrawn for its subject.
+        equipment:
+          $ref: '#/components/schemas/Equipment'
+        clientReference:
+          type: string
+          description: As sent when the job was created.
+        createdAt:
+          type: string
+          format: date-time
+          description: When the job was created.
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the status last changed.
+        completedAt:
+          type: string
+          format: date-time
+          description: When the job reached `completed` or `failed`.
+        video:
+          $ref: '#/components/schemas/VideoInfo'
+        results:
+          $ref: '#/components/schemas/Results'
+        playback:
+          $ref: '#/components/schemas/Playback'
+        failure:
+          $ref: '#/components/schemas/Failure'
+    CreatedJob:
+      description: A newly created job plus its upload instructions.
+      allOf:
+        - $ref: '#/components/schemas/Job'
+        - type: object
+          description: Upload instructions.
+          required: [upload]
+          properties:
+            upload:
+              $ref: '#/components/schemas/Upload'
+    VideoInfo:
+      type: object
+      description: What Vision read from the uploaded video. Present from `processing` on.
+      properties:
+        durationS:
+          type: number
+          description: Length in seconds.
+          minimum: 0
+        frameRate:
+          type: number
+          description: Frames per second.
+          minimum: 0
+        width:
+          type: integer
+          description: Width in pixels, after applying the video's rotation.
+          minimum: 1
+        height:
+          type: integer
+          description: Height in pixels, after applying the video's rotation.
+          minimum: 1
+    Playback:
+      type: object
+      description: |
+        Where to watch the job's video, as Vision stored it after compressing
+        it. Present on a `completed` job and never sent in webhooks. Every
+        `getJob` returns a new URL, so read the job again rather than
+        keeping one. Times in `results` are seconds on this video's timeline.
+      required: [url, contentType, width, height, expiresAt]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: |
+            A signed `GET` URL; `Range` requests work. Treat it as a secret
+            and give it only to the end user the video belongs to, or
+            someone allowed to see it.
+        contentType:
+          type: string
+          description: The video's media type.
+          examples: [video/mp4]
+        width:
+          type: integer
+          description: Width of this video in pixels, after applying its rotation. `bar_path` samples' `px` is on this scale.
+          minimum: 1
+        height:
+          type: integer
+          description: Height of this video in pixels, after applying its rotation. `bar_path` samples' `py` is on this scale.
+          minimum: 1
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the URL stops working. Use this, not a fixed duration.
+    JobLabelRequest:
+      description: The end user's opinion of a job's result.
+      oneOf:
+        - $ref: '#/components/schemas/CorrectLabelRequest'
+        - $ref: '#/components/schemas/IncorrectLabelRequest'
+      discriminator:
+        propertyName: assessment
+        mapping:
+          correct: '#/components/schemas/CorrectLabelRequest'
+          incorrect: '#/components/schemas/IncorrectLabelRequest'
+    CorrectLabelRequest:
+      type: object
+      description: The result was right.
+      additionalProperties: false
+      required: [assessment]
+      properties:
+        assessment:
+          type: string
+          description: Always `correct`.
+          const: correct
+    IncorrectLabelRequest:
+      type: object
+      description: The result was wrong, optionally with why.
+      additionalProperties: false
+      required: [assessment]
+      properties:
+        assessment:
+          type: string
+          description: Always `incorrect`.
+          const: incorrect
+        reason:
+          $ref: '#/components/schemas/LabelReason'
+    JobLabel:
+      type: object
+      description: The job's current label.
+      required: [jobId, assessment, updatedAt]
+      properties:
+        jobId:
+          $ref: '#/components/schemas/JobId'
+        assessment:
+          $ref: '#/components/schemas/LabelAssessment'
+        reason:
+          $ref: '#/components/schemas/LabelReason'
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the label was last set.
+    LabelAssessment:
+      type: string
+      description: Whether the end user thought the result was right.
+      enum: [correct, incorrect]
+      examples: [incorrect]
+    LabelReason:
+      type: string
+      description: |
+        Optional, with `incorrect` only. `wrong_rep_count`: the number of reps
+        was wrong. `bar_path_off`: the drawn path didn't follow the bar.
+        `wrong_lift`: the video isn't the lift the job named. New values may
+        be added.
+      enum: [wrong_rep_count, bar_path_off, wrong_lift]
+      examples: [wrong_rep_count]
+    TrainingWithdrawal:
+      type: object
+      description: The outcome of withdrawing a subject's training permission.
+      required: [subjectId, jobsUpdated, withdrawnAt]
+      properties:
+        subjectId:
+          $ref: '#/components/schemas/SubjectId'
+        jobsUpdated:
+          type: integer
+          description: How many jobs changed from `trainingAllowed` true to false; 0 when none did.
+          minimum: 0
+        withdrawnAt:
+          type: string
+          format: date-time
+          description: When this request was applied.
+    Failure:
+      type: object
+      description: Why a `failed` job has no results.
+      required: [reason, retryable]
+      properties:
+        reason:
+          $ref: '#/components/schemas/ReasonCode'
+        retryable:
+          type: boolean
+          description: Whether creating a new job with the same video may succeed.
+        detail:
+          type: string
+          description: A human-readable explanation, for logs; not for display to end users.
+    Results:
+      type: object
+      description: |
+        One entry per requested feature, present when the job is `completed`.
+        New features may add keys.
+      properties:
+        bar_path:
+          $ref: '#/components/schemas/BarPathResult'
+        velocity:
+          $ref: '#/components/schemas/VelocityResult'
+        rep_count:
+          $ref: '#/components/schemas/RepCountResult'
+        verification_checks:
+          $ref: '#/components/schemas/VerificationChecksResult'
+    Unanalysable:
+      type: object
+      description: The feature (or check) could not be analysed; nothing is billed for it.
+      required: [outcome, reason, modelVersion]
+      properties:
+        outcome:
+          type: string
+          description: Always `unanalysable`.
+          const: unanalysable
+        reason:
+          $ref: '#/components/schemas/ReasonCode'
+        detail:
+          type: string
+          description: A human-readable explanation, for logs; not for display to end users.
+        modelVersion:
+          $ref: '#/components/schemas/ModelVersion'
+    ModelVersion:
+      type: string
+      description: The analysis version that produced this result (models plus rules), for comparing results over time.
+      minLength: 1
+      maxLength: 64
+      examples: [2026.11.0]
+    Confidence:
+      type: number
+      description: |
+        Vision's confidence in this result, from 0 to 1. Results below the
+        minimum are returned as `unanalysable` with `low_confidence` instead.
+      minimum: 0
+      maximum: 1
+    BarPathResult:
+      description: The bar's path, or why it couldn't be traced.
+      oneOf:
+        - $ref: '#/components/schemas/BarPathAnalysed'
+        - $ref: '#/components/schemas/Unanalysable'
+      discriminator:
+        propertyName: outcome
+        mapping:
+          analysed: '#/components/schemas/BarPathAnalysed'
+          unanalysable: '#/components/schemas/Unanalysable'
+    BarPathAnalysed:
+      type: object
+      description: |
+        The bar's centre over time, in metres from its position in the first
+        sample: `x` horizontal (positive to the right of the frame), `y`
+        vertical (positive up). Scaled from the plate diameter. `px` and `py`
+        give the same point on the `playback` video, for drawing the path
+        over it.
+      required: [outcome, confidence, modelVersion, samples]
+      properties:
+        outcome:
+          type: string
+          description: Always `analysed`.
+          const: analysed
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        modelVersion:
+          $ref: '#/components/schemas/ModelVersion'
+        samples:
+          type: array
+          description: Points in time order; frames where the bar wasn't found are left out.
+          items:
+            $ref: '#/components/schemas/BarPathSample'
+    BarPathSample:
+      type: object
+      description: The bar's position at one moment.
+      required: [t, x, y, px, py]
+      properties:
+        t:
+          type: number
+          description: Seconds from the start of the video.
+          minimum: 0
+        x:
+          type: number
+          description: Horizontal offset in metres.
+        y:
+          type: number
+          description: Vertical offset in metres.
+        px:
+          type: number
+          description: The bar's centre in pixels from the left edge of the `playback` video.
+          minimum: 0
+        py:
+          type: number
+          description: The bar's centre in pixels from the top edge of the `playback` video.
+          minimum: 0
+    VelocityResult:
+      description: Bar speed per rep, or why it couldn't be measured.
+      oneOf:
+        - $ref: '#/components/schemas/VelocityAnalysed'
+        - $ref: '#/components/schemas/Unanalysable'
+      discriminator:
+        propertyName: outcome
+        mapping:
+          analysed: '#/components/schemas/VelocityAnalysed'
+          unanalysable: '#/components/schemas/Unanalysable'
+    VelocityAnalysed:
+      type: object
+      description: Concentric (lifting) bar speed per rep, in metres per second.
+      required: [outcome, confidence, modelVersion, reps]
+      properties:
+        outcome:
+          type: string
+          description: Always `analysed`.
+          const: analysed
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        modelVersion:
+          $ref: '#/components/schemas/ModelVersion'
+        reps:
+          type: array
+          description: One entry per rep, in order.
+          items:
+            $ref: '#/components/schemas/RepVelocity'
+    RepVelocity:
+      type: object
+      description: One rep's concentric velocity.
+      required: [rep, meanConcentricMps, peakConcentricMps]
+      properties:
+        rep:
+          type: integer
+          description: The rep's number, from 1, matching `rep_count.reps[].rep`.
+          minimum: 1
+        meanConcentricMps:
+          type: number
+          description: Mean bar speed from the bottom of the rep to lockout, m/s.
+          minimum: 0
+        peakConcentricMps:
+          type: number
+          description: Highest bar speed in the concentric phase, m/s.
+          minimum: 0
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+    RepCountResult:
+      description: The reps found, or why they couldn't be counted.
+      oneOf:
+        - $ref: '#/components/schemas/RepCountAnalysed'
+        - $ref: '#/components/schemas/Unanalysable'
+      discriminator:
+        propertyName: outcome
+        mapping:
+          analysed: '#/components/schemas/RepCountAnalysed'
+          unanalysable: '#/components/schemas/Unanalysable'
+    RepCountAnalysed:
+      type: object
+      description: The completed reps and when each happened.
+      required: [outcome, confidence, modelVersion, count, reps]
+      properties:
+        outcome:
+          type: string
+          description: Always `analysed`.
+          const: analysed
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        modelVersion:
+          $ref: '#/components/schemas/ModelVersion'
+        count:
+          type: integer
+          description: Number of completed reps.
+          minimum: 0
+        reps:
+          type: array
+          description: One entry per completed rep, in order.
+          items:
+            $ref: '#/components/schemas/RepTiming'
+    RepTiming:
+      type: object
+      description: When one rep started, reached its bottom (or turning point) and ended.
+      required: [rep, startS, bottomS, endS]
+      properties:
+        rep:
+          type: integer
+          description: The rep's number, from 1.
+          minimum: 1
+        startS:
+          type: number
+          description: Seconds from the start of the video when the rep began.
+          minimum: 0
+        bottomS:
+          type: number
+          description: When the bar was lowest (the turning point).
+          minimum: 0
+        endS:
+          type: number
+          description: When the rep was locked out.
+          minimum: 0
+    VerificationChecksResult:
+      type: object
+      description: |
+        The checks that exist for the lift, keyed by check. In v1 there is one,
+        `squat_depth`, for the squat. Vision reports evidence; whether a lift
+        counts as "verified" is the tenant's decision. New checks may add keys.
+      properties:
+        squat_depth:
+          $ref: '#/components/schemas/SquatDepthResult'
+    SquatDepthResult:
+      description: Whether each rep reached depth, or why it couldn't be judged.
+      oneOf:
+        - $ref: '#/components/schemas/SquatDepthAnalysed'
+        - $ref: '#/components/schemas/Unanalysable'
+      discriminator:
+        propertyName: outcome
+        mapping:
+          analysed: '#/components/schemas/SquatDepthAnalysed'
+          unanalysable: '#/components/schemas/Unanalysable'
+    SquatDepthAnalysed:
+      type: object
+      description: |
+        Depth per rep: the hip crease below the top of the knee at the
+        bottom, judged from the side-on pose.
+      required: [outcome, confidence, modelVersion, allRepsPassed, reps]
+      properties:
+        outcome:
+          type: string
+          description: Always `analysed`.
+          const: analysed
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        modelVersion:
+          $ref: '#/components/schemas/ModelVersion'
+        allRepsPassed:
+          type: boolean
+          description: True when every rep reached depth.
+        reps:
+          type: array
+          description: One entry per rep, in order.
+          items:
+            $ref: '#/components/schemas/RepDepth'
+    RepDepth:
+      type: object
+      description: One rep's depth.
+      required: [rep, passed, minKneeAngleDeg]
+      properties:
+        rep:
+          type: integer
+          description: The rep's number, from 1.
+          minimum: 1
+        passed:
+          type: boolean
+          description: True when the hip went below the knee.
+        minKneeAngleDeg:
+          type: number
+          description: The smallest knee angle in the rep, in degrees (180 is a straight leg).
+          minimum: 0
+          maximum: 180
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+    JobEvent:
+      type: object
+      description: A webhook event about a job. It carries ids only; results are read with `getJob`.
+      required: [id, type, createdAt, data]
+      properties:
+        id:
+          $ref: '#/components/schemas/EventId'
+        type:
+          type: string
+          description: The event type. New types may be added; ignore ones you don't handle (return `2xx`).
+          examples: [job.completed]
+        createdAt:
+          type: string
+          format: date-time
+          description: When the event happened (not when it was delivered).
+        data:
+          type: object
+          description: The job the event is about.
+          required: [jobId, status, subjectId]
+          properties:
+            jobId:
+              $ref: '#/components/schemas/JobId'
+            status:
+              $ref: '#/components/schemas/JobStatus'
+            subjectId:
+              $ref: '#/components/schemas/SubjectId'
+            clientReference:
+              type: string
+              description: The job's `clientReference`, when it has one.
+    Problem:
+      type: object
+      description: An error, as RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI identifying the problem type.
+        title:
+          type: string
+          description: A short summary of the problem type.
+        status:
+          type: integer
+          description: The HTTP status code.
+        code:
+          type: string
+          description: A stable machine-readable code, e.g. `invalid_request`. New codes may be added.
+        detail:
+          type: string
+          description: A human-readable explanation of this occurrence.
+        requestId:
+          type: string
+          description: Vision's id for the request, to quote when asking for support.
+        errors:
+          type: array
+          description: Per-field errors for a `400`.
+          items:
+            type: object
+            description: One invalid field.
+            required: [pointer, detail]
+            properties:
+              pointer:
+                type: string
+                description: JSON Pointer to the field in the request body.
+              detail:
+                type: string
+                description: What is wrong with it.
+  examples:
+    CreatedJob:
+      summary: Created, awaiting upload
+      value:
+        id: job_01JC8YX4D2F7H1K9M3P5Q8S0TV
+        status: awaiting_upload
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: false
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48213
+        createdAt: '2026-11-08T10:14:03Z'
+        updatedAt: '2026-11-08T10:14:03Z'
+        upload:
+          mode: single
+          method: PUT
+          url: https://storage.googleapis.com/vision-uploads/job_01JC8YX4D2F7H1K9M3P5Q8S0TV?X-Goog-Signature=redacted
+          headers:
+            Content-Type: video/mp4
+            x-goog-content-length-range: '18874368,18874368'
+          expiresAt: '2026-11-08T10:29:03Z'
+    CreatedJobResumable:
+      summary: Created, awaiting a resumable upload
+      value:
+        id: job_01JC9A7R2T4V6X8Z0B1D3F5H7K
+        status: awaiting_upload
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: false
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48220
+        createdAt: '2026-11-08T12:00:00Z'
+        updatedAt: '2026-11-08T12:00:00Z'
+        upload:
+          mode: resumable
+          method: PUT
+          url: https://storage.googleapis.com/upload/storage/v1/b/vision-uploads/o?uploadType=resumable&upload_id=redacted
+          chunkMultipleBytes: 262144
+          expiresAt: '2026-11-09T12:00:00Z'
+    CompletedJob:
+      summary: Completed squat, every feature analysed
+      value:
+        id: job_01JC8YX4D2F7H1K9M3P5Q8S0TV
+        status: completed
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: false
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48213
+        createdAt: '2026-11-08T10:14:03Z'
+        updatedAt: '2026-11-08T10:15:41Z'
+        completedAt: '2026-11-08T10:15:41Z'
+        video:
+          durationS: 9.4
+          frameRate: 30
+          width: 1080
+          height: 1920
+        playback:
+          url: https://storage.googleapis.com/vision-clips/job_01JC8YX4D2F7H1K9M3P5Q8S0TV.mp4?X-Goog-Signature=redacted
+          contentType: video/mp4
+          width: 1080
+          height: 1920
+          expiresAt: '2026-11-08T10:31:00Z'
+        results:
+          bar_path:
+            outcome: analysed
+            confidence: 0.91
+            modelVersion: 2026.11.0
+            samples:
+              - { t: 0.5, x: 0.0, y: 0.0, px: 540, py: 900 }
+              - { t: 1.8, x: 0.02, y: -0.56, px: 565, py: 1600 }
+              - { t: 3.1, x: 0.01, y: 0.0, px: 553, py: 900 }
+              - { t: 5.0, x: 0.03, y: -0.55, px: 578, py: 1588 }
+              - { t: 6.6, x: 0.01, y: -0.01, px: 553, py: 912 }
+          velocity:
+            outcome: analysed
+            confidence: 0.88
+            modelVersion: 2026.11.0
+            reps:
+              - { rep: 1, meanConcentricMps: 0.52, peakConcentricMps: 0.81 }
+              - { rep: 2, meanConcentricMps: 0.41, peakConcentricMps: 0.67 }
+          rep_count:
+            outcome: analysed
+            confidence: 0.97
+            modelVersion: 2026.11.0
+            count: 2
+            reps:
+              - { rep: 1, startS: 0.5, bottomS: 1.8, endS: 3.1 }
+              - { rep: 2, startS: 3.4, bottomS: 5.0, endS: 6.6 }
+          verification_checks:
+            squat_depth:
+              outcome: analysed
+              confidence: 0.84
+              modelVersion: 2026.11.0
+              allRepsPassed: true
+              reps:
+                - { rep: 1, passed: true, minKneeAngleDeg: 68 }
+                - { rep: 2, passed: true, minKneeAngleDeg: 72 }
+    UnanalysableJob:
+      summary: Completed, but no plates were found
+      description: |
+        The job completed: reps and depth come from the pose, but without a
+        visible plate there is no scale, so bar path and velocity are
+        unanalysable rather than guessed.
+      value:
+        id: job_01JC8ZB3N4M5K6J7H8G9F0E1DC
+        status: completed
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: true
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48214
+        createdAt: '2026-11-08T10:20:11Z'
+        updatedAt: '2026-11-08T10:21:30Z'
+        completedAt: '2026-11-08T10:21:30Z'
+        video:
+          durationS: 7.1
+          frameRate: 30
+          width: 1080
+          height: 1920
+        playback:
+          url: https://storage.googleapis.com/vision-clips/job_01JC8ZB3N4M5K6J7H8G9F0E1DC.mp4?X-Goog-Signature=redacted
+          contentType: video/mp4
+          width: 1080
+          height: 1920
+          expiresAt: '2026-11-08T10:37:00Z'
+        results:
+          bar_path:
+            outcome: unanalysable
+            reason: plates_not_found
+            detail: No red or blue bumper plate found in 96% of frames.
+            modelVersion: 2026.11.0
+          velocity:
+            outcome: unanalysable
+            reason: plates_not_found
+            modelVersion: 2026.11.0
+          rep_count:
+            outcome: analysed
+            confidence: 0.93
+            modelVersion: 2026.11.0
+            count: 1
+            reps:
+              - { rep: 1, startS: 1.2, bottomS: 2.6, endS: 4.0 }
+          verification_checks:
+            squat_depth:
+              outcome: analysed
+              confidence: 0.79
+              modelVersion: 2026.11.0
+              allRepsPassed: false
+              reps:
+                - { rep: 1, passed: false, minKneeAngleDeg: 97 }
+    FailedJob:
+      summary: Failed, the upload never arrived
+      value:
+        id: job_01JC8ZZ9W8V7X6T5S4R3Q2P1NM
+        status: failed
+        schemaVersion: '1.0'
+        lift: deadlift
+        features: [velocity]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: false
+        clientReference: set_48217
+        createdAt: '2026-11-08T10:47:10Z'
+        updatedAt: '2026-11-08T11:02:10Z'
+        completedAt: '2026-11-08T11:02:10Z'
+        failure:
+          reason: upload_expired
+          retryable: true
+          detail: No video was uploaded before the upload URL expired.

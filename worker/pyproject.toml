@@ -1,0 +1,10 @@
+# Tool settings only: the worker is an application, installed from the lock files.
+[tool.ruff]
+target-version = "py311"
+
+[tool.pytest]
+minversion = "9.0"
+addopts = ["-ra"]
+testpaths = ["tests"]
+pythonpath = ["."]
+strict = true

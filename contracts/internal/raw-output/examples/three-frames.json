@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "jobId": "job_01JC8YX4D2F7H1K9M3P5Q8S0TV",
+  "worker": {
+    "version": "0.1.0",
+    "poseModel": "mediapipe-pose-landmarker-full@0.10.14",
+    "barDetector": "opencv-hsv-plates@1"
+  },
+  "video": { "width": 1080, "height": 1920, "frameRate": 30, "durationS": 0.1, "frameCount": 3 },
+  "frames": [
+    {
+      "index": 0,
+      "t": 0,
+      "bar": { "x": 402.5, "y": 611.0, "radiusPx": 141.2, "confidence": 0.93 },
+      "pose": {
+        "right_hip": { "x": 455.0, "y": 1010.5, "confidence": 0.98 },
+        "right_knee": { "x": 470.2, "y": 1320.0, "confidence": 0.97 },
+        "right_ankle": { "x": 440.9, "y": 1640.3, "confidence": 0.96 }
+      }
+    },
+    {
+      "index": 1,
+      "t": 0.0333,
+      "bar": null,
+      "pose": {
+        "right_hip": { "x": 455.4, "y": 1012.0, "confidence": 0.98 },
+        "right_knee": { "x": 470.6, "y": 1320.2, "confidence": 0.97 },
+        "right_ankle": { "x": 441.0, "y": 1640.1, "confidence": 0.96 }
+      }
+    },
+    {
+      "index": 2,
+      "t": 0.0667,
+      "bar": { "x": 402.9, "y": 616.4, "radiusPx": 140.8, "confidence": 0.91 },
+      "pose": null
+    }
+  ]
+}

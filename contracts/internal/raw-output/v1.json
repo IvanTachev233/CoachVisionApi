@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vision-api.invalid/contracts/internal/raw-output/v1.json",
+  "title": "Vision worker raw output, v1",
+  "description": "What the Python worker writes for one video: per-frame detections in pixels and nothing else. The API turns this into reps, velocity, bar path and checks (ADR 0017, choice 2A), so a new model changes only the worker. Internal to Vision and tested by both the Python and C# suites; never returned to tenants.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "jobId", "worker", "video", "frames"],
+  "properties": {
+    "schemaVersion": {
+      "description": "This format's version. A breaking change is a new file (v2.json).",
+      "const": "1.0"
+    },
+    "jobId": {
+      "description": "The job this output belongs to.",
+      "type": "string",
+      "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "worker": {
+      "description": "What produced this output, for reproducing and comparing results.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "poseModel", "barDetector"],
+      "properties": {
+        "version": {
+          "description": "The worker image's version.",
+          "type": "string",
+          "minLength": 1
+        },
+        "poseModel": {
+          "description": "The pose model and variant, for example mediapipe-pose-landmarker-full@0.10.14.",
+          "type": "string",
+          "minLength": 1
+        },
+        "barDetector": {
+          "description": "The bar detector and its version, for example opencv-hsv-plates@1.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "video": {
+      "description": "The video as the worker decoded it. Pixel coordinates in frames are in this width and height, after applying the video's rotation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "frameRate", "durationS", "frameCount"],
+      "properties": {
+        "width": { "description": "Width in pixels.", "type": "integer", "minimum": 1 },
+        "height": { "description": "Height in pixels.", "type": "integer", "minimum": 1 },
+        "frameRate": { "description": "Average frames per second.", "type": "number", "exclusiveMinimum": 0 },
+        "durationS": { "description": "Length in seconds.", "type": "number", "minimum": 0 },
+        "frameCount": { "description": "Frames decoded.", "type": "integer", "minimum": 0 }
+      }
+    },
+    "frames": {
+      "description": "One entry per analysed frame, in time order. Frame times come from the video's timestamps, since phone video often has a variable frame rate.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/frame" }
+    }
+  },
+  "$defs": {
+    "confidence": {
+      "description": "The detector's own confidence, 0 to 1.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "frame": {
+      "description": "What was detected in one frame. A detector that found nothing writes null rather than a guess.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "t", "bar", "pose"],
+      "properties": {
+        "index": { "description": "The frame's number in the video, from 0.", "type": "integer", "minimum": 0 },
+        "t": { "description": "Seconds from the start of the video.", "type": "number", "minimum": 0 },
+        "bar": {
+          "description": "The bar's end, seen as the plate's centre, or null when no plate was found.",
+          "oneOf": [{ "$ref": "#/$defs/bar" }, { "type": "null" }]
+        },
+        "pose": {
+          "description": "The lifter's landmarks, or null when no body was found.",
+          "oneOf": [{ "$ref": "#/$defs/pose" }, { "type": "null" }]
+        }
+      }
+    },
+    "bar": {
+      "description": "A detected plate, in pixels from the top-left of the frame. radiusPx with the job's declared plate diameter gives the scale (ADR 0017, choice 3A).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "radiusPx", "confidence"],
+      "properties": {
+        "x": { "description": "Centre, pixels from the left.", "type": "number" },
+        "y": { "description": "Centre, pixels from the top.", "type": "number" },
+        "radiusPx": { "description": "The plate's radius in pixels.", "type": "number", "exclusiveMinimum": 0 },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "landmark": {
+      "description": "One body point, in pixels from the top-left of the frame.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "confidence"],
+      "properties": {
+        "x": { "description": "Pixels from the left.", "type": "number" },
+        "y": { "description": "Pixels from the top.", "type": "number" },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "pose": {
+      "description": "Named body points, so the format doesn't depend on one model's landmark numbering. A point the model doesn't report is left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "nose": { "$ref": "#/$defs/landmark" },
+        "left_shoulder": { "$ref": "#/$defs/landmark" },
+        "right_shoulder": { "$ref": "#/$defs/landmark" },
+        "left_elbow": { "$ref": "#/$defs/landmark" },
+        "right_elbow": { "$ref": "#/$defs/landmark" },
+        "left_wrist": { "$ref": "#/$defs/landmark" },
+        "right_wrist": { "$ref": "#/$defs/landmark" },
+        "left_hip": { "$ref": "#/$defs/landmark" },
+        "right_hip": { "$ref": "#/$defs/landmark" },
+        "left_knee": { "$ref": "#/$defs/landmark" },
+        "right_knee": { "$ref": "#/$defs/landmark" },
+        "left_ankle": { "$ref": "#/$defs/landmark" },
+        "right_ankle": { "$ref": "#/$defs/landmark" }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Development tools, kept compatible with the versions in requirements.txt.
+-c requirements.txt
+pip-tools
+pytest
+ruff

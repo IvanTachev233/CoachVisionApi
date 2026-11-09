@@ -1,0 +1,33 @@
+# Clips: never in git. They hold people's images and belong in private storage.
+*.mov
+*.mp4
+*.m4v
+*.avi
+*.mkv
+*.webm
+
+# Model weights: downloaded at build or run time, never in git.
+*.task
+*.tflite
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+*.safetensors
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Tooling
+.claude/
+.DS_Store
+.idea/
+.vscode/
+node_modules/
+
+# Python (worker/.gitignore has the full list)
+.venv/
+__pycache__/
