@@ -107,7 +107,7 @@
       }
     },
     "pose": {
-      "description": "Named body points, so the format doesn't depend on one model's landmark numbering. A point the model doesn't report is left out.",
+      "description": "Named body points, so the format doesn't depend on one model's landmark numbering. A point the model doesn't report is left out. Positions are smoothed over time; confidence is as the model gave it, so a point under 0.5 is still the model's guess, or lies on a bridge between the sure frames before and after it. In a squat an ankle is held at one place while the foot stands.",
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,

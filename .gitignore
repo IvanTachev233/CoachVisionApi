@@ -31,3 +31,4 @@ node_modules/
 # Python (worker/.gitignore has the full list)
 .venv/
 __pycache__/
+Plans.md

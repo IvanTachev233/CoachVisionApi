@@ -1,5 +1,6 @@
 # Development tools, kept compatible with the versions in requirements.txt.
 -c requirements.txt
+jsonschema
 pip-tools
 pytest
 ruff

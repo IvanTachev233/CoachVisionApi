@@ -1,10 +1,9 @@
 # Direct dependencies of the worker. README.md has the command that locks them.
 fastapi
+mediapipe
 numpy
+onnxruntime
 opencv-contrib-python
 pydantic
 scipy
 uvicorn
-
-# Held at the proof of concept's version until the worker moves to the Pose Landmarker task.
-mediapipe==0.10.14
