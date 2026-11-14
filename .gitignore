@@ -21,6 +21,13 @@
 .env.*
 !.env.example
 
+# OpenTofu: state and saved plans can hold values in cleartext; they live in
+# each project's state bucket. .terraform.lock.hcl is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
 # Tooling
 .claude/
 .DS_Store
