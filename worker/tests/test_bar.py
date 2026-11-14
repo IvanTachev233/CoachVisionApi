@@ -169,7 +169,9 @@ def test_a_few_frames_far_from_where_the_track_is_before_and_after_them_are_drop
     kept = drop_islands(bars)
 
     assert kept[17] is None and kept[18] is None
-    assert [bar is None for i, bar in enumerate(kept) if i not in (17, 18)] == [bar is None for i, bar in enumerate(bars) if i not in (17, 18)]
+    assert [bar is None for i, bar in enumerate(kept) if i not in (17, 18)] == [
+        bar is None for i, bar in enumerate(bars) if i not in (17, 18)
+    ]
 
 
 def test_a_few_frames_between_gaps_that_lie_on_the_track_s_way_are_kept():

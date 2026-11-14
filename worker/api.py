@@ -34,8 +34,10 @@ app = FastAPI(
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+
 class SquatAnalysisRequest(BaseModel):
     """Payload sent by the client to request a squat analysis."""
+
     video_path: str = Field(
         ...,
         description="Local filesystem path to the squat video file.",
@@ -51,6 +53,7 @@ class SquatAnalysisRequest(BaseModel):
 
 class VelocityMetrics(BaseModel):
     """Velocity-Based Training metrics for the concentric phase."""
+
     peak_concentric_velocity: float | None = Field(
         description="Highest instantaneous barbell velocity (m/s) during the concentric phase.",
     )
@@ -64,6 +67,7 @@ class VelocityMetrics(BaseModel):
 
 class SquatAnalysisResponse(BaseModel):
     """Structured results returned after analysing a squat video."""
+
     video_path: str = Field(description="Path of the video that was analysed.")
     lowest_knee_angle: float | None = Field(
         description="Interior knee angle (degrees) at the deepest point of the squat.",
@@ -85,6 +89,7 @@ class SquatAnalysisResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.post(
     "/v1/analyze/squat",

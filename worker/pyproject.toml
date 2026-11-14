@@ -1,6 +1,8 @@
 # Tool settings only: the worker is an application, installed from the lock files.
 [tool.ruff]
 target-version = "py311"
+# The width the code is written to; `ruff format --check` holds it there (CI).
+line-length = 120
 
 [tool.pytest]
 minversion = "9.0"

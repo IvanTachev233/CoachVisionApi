@@ -1,0 +1,54 @@
+version: 2
+updates:
+  # Minor and patch updates come as one PR per ecosystem; majors come one PR per package, since
+  # they usually need code changes. CI restores with the lock files, so a PR that changes a
+  # version without its lock file fails there.
+  - package-ecosystem: nuget
+    directory: /api # Directory.Packages.props, packages.lock.json
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: dotnet-sdk
+    directory: /api # global.json
+    schedule:
+      interval: weekly
+    ignore:
+      # The .NET major moves in one change across global.json, the target framework and the
+      # Dockerfile's images, and stays on LTS releases (11 is STS).
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: pip
+    directory: /worker # requirements*.in, locked with pip-compile into requirements*.txt with hashes
+    schedule:
+      interval: weekly
+    groups:
+      pip:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /api
+      - /worker
+    schedule:
+      interval: weekly
+    ignore:
+      # Base images move by digest within their tag. The .NET major (above) and the Python minor
+      # (worker/.python-version, the lock files and the image together) are changed by hand.
+      - dependency-name: mcr.microsoft.com/dotnet/*
+        update-types: ["version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: github-actions
+    directory: / # checks .github/workflows; actions are pinned by SHA with the version as a comment
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -176,7 +176,9 @@ def smooth_pose(poses, *, feet_planted=False):
                 start = None
     # A joint above is bridged before the one it carries, so that one can go by it.
     placed = {}
-    for name in sorted({name for pose in poses if pose for name in pose}, key=lambda name: (name in CARRIED_BY, "wrist" in name)):
+    for name in sorted(
+        {name for pose in poses if pose for name in pose}, key=lambda name: (name in CARRIED_BY, "wrist" in name)
+    ):
         placed[name] = _bridge(poses, out, name, placed.get(CARRIED_BY.get(name)))
     if feet_planted:
         for name in FEET:
@@ -214,7 +216,12 @@ def _bridge(poses, out, name, carrier_placed):
             carried = carrier is not None and carrier_placed is not None and bool(carrier_placed[i - 1 : j + 1].all())
             if carried or carrier is None:
                 # Each frame's place of the carrier, or the picture's corner for a point nothing carries.
-                base = np.array([(out[k][carrier]["x"], out[k][carrier]["y"]) if carried else (0.0, 0.0) for k in range(i - 1, j + 1)])
+                base = np.array(
+                    [
+                        (out[k][carrier]["x"], out[k][carrier]["y"]) if carried else (0.0, 0.0)
+                        for k in range(i - 1, j + 1)
+                    ]
+                )
                 own = np.array([(out[k][name]["x"], out[k][name]["y"]) for k in (i - 1, j)])
                 share = (np.arange(1, length + 1) / (length + 1))[:, None]
                 bridge = base[1:-1] + (own[0] - base[0]) * (1 - share) + (own[1] - base[-1]) * share
@@ -233,7 +240,9 @@ def _stands(poses, out, name, area):
     frames on end is a foot standing, at the middle of their positions. A step in between
     (a walk-out before a squat) breaks the stretch, so each place the foot stands gets its own.
     """
-    at = [k for k, pose in enumerate(poses) if pose is not None and name in pose and pose[name]["confidence"] >= POSE_SURE]
+    at = [
+        k for k, pose in enumerate(poses) if pose is not None and name in pose and pose[name]["confidence"] >= POSE_SURE
+    ]
     if len(at) < PLANTED_FRAMES:
         return []
     seen = np.array([(out[k][name]["x"], out[k][name]["y"]) for k in at])

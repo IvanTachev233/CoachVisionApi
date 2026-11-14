@@ -196,7 +196,9 @@ def render(models, *, outputs, labels, centre_tolerance=CENTRE_TOLERANCE, radius
         count = len(scores.clips)
         rows = [_row(clip, score) for clip, score in scores.clips.items()]
         rows.append(_row(f"Total, {count} clip{'' if count == 1 else 's'}", whole))
-        notes = [f"Labelled frames with the plate hidden: {whole.hidden}. A bar was reported on: {whole.hidden_with_bar}."]
+        notes = [
+            f"Labelled frames with the plate hidden: {whole.hidden}. A bar was reported on: {whole.hidden_with_bar}."
+        ]
         if scores.missing:
             notes.append(f"No output for labelled clips: {', '.join(scores.missing)}.")
         parts += [

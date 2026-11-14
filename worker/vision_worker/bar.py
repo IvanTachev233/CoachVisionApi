@@ -346,7 +346,9 @@ def _strongest_edge_on_rim(gray, centre, rx, ry, band=SEARCH_BANDS[0]):
 
 def _most_in_a_stretch(rays, stretch):
     """The most true entries in any `stretch` neighbouring rays, going around the circle."""
-    counts = np.convolve(np.concatenate([rays, rays[: stretch - 1]]).astype(np.int32), np.ones(stretch, np.int32), "valid")
+    counts = np.convolve(
+        np.concatenate([rays, rays[: stretch - 1]]).astype(np.int32), np.ones(stretch, np.int32), "valid"
+    )
     return int(counts.max())
 
 
@@ -591,15 +593,23 @@ class BarTracker:
         for index in sorted({count * (k + 1) // (FIND_FRAMES + 1) for k in range(FIND_FRAMES)}):
             gray = self._gray(index)
             taken = []
-            for left, top, right, bottom, score in proposer.propose(cv2.imdecode(self._colours[index], cv2.IMREAD_COLOR)):
+            for left, top, right, bottom, score in proposer.propose(
+                cv2.imdecode(self._colours[index], cv2.IMREAD_COLOR)
+            ):
                 width, height = right - left, bottom - top
-                if score < MIN_BOX_SCORE or height < MIN_BOX_HEIGHT or not BOX_SHAPES[0] <= width / height <= BOX_SHAPES[1]:
+                if (
+                    score < MIN_BOX_SCORE
+                    or height < MIN_BOX_HEIGHT
+                    or not BOX_SHAPES[0] <= width / height <= BOX_SHAPES[1]
+                ):
                     continue
                 radius = height / 2
                 if not FIND_RADIUS_PER_TORSO[0] * torso <= radius <= FIND_RADIUS_PER_TORSO[1] * torso:
                     continue
                 centre = ((left + right) / 2, (top + bottom) / 2)
-                if any(math.dist(centre, c) < SAME_PLACE * radius and abs(radius / r - 1) < SAME_SIZE for c, r in taken):
+                if any(
+                    math.dist(centre, c) < SAME_PLACE * radius and abs(radius / r - 1) < SAME_SIZE for c, r in taken
+                ):
                     continue
                 taken.append((centre, radius))
                 rim = (centre[0], centre[1] - radius)
@@ -747,9 +757,7 @@ class BarTracker:
         return float(np.median(apart)) if len(apart) >= MIN_SHARED_FRAMES else math.inf
 
     def _detection(self, x, y, rx, ry, share):
-        return BarDetection(
-            x=x / self._scale, y=y / self._scale, radius_px=max(rx, ry) / self._scale, confidence=share
-        )
+        return BarDetection(x=x / self._scale, y=y / self._scale, radius_px=max(rx, ry) / self._scale, confidence=share)
 
     def _measure_mark(self, gray, centre, rim):
         """The plate at the mark as (x, y, rx, ry, share of the rim seen), or None if no rim is there.
@@ -761,7 +769,9 @@ class BarTracker:
         reach = math.dist(centre, rim)
         angle = math.atan2(rim[1] - centre[1], rim[0] - centre[0])
         # For each shape, rx = stretch * ry, the oval that passes through the rim point.
-        through_rim = [reach * math.hypot(math.cos(angle), stretch * math.sin(angle)) / stretch for stretch in STRETCHES]
+        through_rim = [
+            reach * math.hypot(math.cos(angle), stretch * math.sin(angle)) / stretch for stretch in STRETCHES
+        ]
         first = self._best_shape(gray, centre, through_rim)
         if first is None:
             return None

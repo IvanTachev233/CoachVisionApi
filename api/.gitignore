@@ -1,0 +1,6 @@
+# .NET build output and local files
+bin/
+obj/
+*.user
+.vs/
+TestResults/

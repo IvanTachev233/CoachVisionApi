@@ -184,7 +184,9 @@ def test_the_lift_says_whether_the_feet_are_held_in_place(tmp_path, model_dir, m
 
     assert cli.main([str(clip), "--out", str(out), *options]) == 0
 
-    ankles = {(f["pose"]["left_ankle"]["x"], f["pose"]["left_ankle"]["y"]) for f in json.loads(out.read_text())["frames"]}
+    ankles = {
+        (f["pose"]["left_ankle"]["x"], f["pose"]["left_ankle"]["y"]) for f in json.loads(out.read_text())["frames"]
+    }
     assert (len(ankles) == 1) == held
 
 

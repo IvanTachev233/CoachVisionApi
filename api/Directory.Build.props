@@ -1,0 +1,21 @@
+<Project>
+  <!-- Settings every project under api/ shares. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The runtime image is chiseled and has no ICU. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Restore exactly what packages.lock.json names; CI and the Dockerfile restore with locked mode. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+
+    <!-- Vulnerable-package check: restore audits direct and transitive packages against
+         nuget.org's advisories, and a finding of any severity is a warning, made an error above. -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+</Project>

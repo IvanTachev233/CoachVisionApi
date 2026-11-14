@@ -118,7 +118,9 @@ def test_finder_proposals_uses_the_proposer_and_names_it_in_the_output(faked, tm
     clip, centres, made, folder = faked
     out = tmp_path / "result.json"
 
-    code = cli.main([str(clip), "--out", str(out), "--model-dir", str(folder), "--job-id", JOB_ID, "--finder", "proposals"])
+    code = cli.main(
+        [str(clip), "--out", str(out), "--model-dir", str(folder), "--job-id", JOB_ID, "--finder", "proposals"]
+    )
 
     assert code == 0
     result = json.loads(out.read_text())
