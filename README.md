@@ -7,6 +7,7 @@ Video analysis for strength training: a client uploads a clip of a lift and gets
 | `contracts/` | The public API (OpenAPI) and the worker's raw-output schema. See `contracts/README.md`. |
 | `worker/` | Python video worker: `vision_worker/` turns one clip into raw per-frame detections. `api.py` and `kinematics_engine.py` are the old proof of concept, which no longer runs (it needs MediaPipe's removed legacy API). |
 | `api/` | The API service. Empty until it is scaffolded. |
+| `infra/` | Google Cloud for Vision, managed with OpenTofu. See `infra/README.md`. |
 
 Clips and model weights never go in git; `.gitignore` blocks the usual file types.
 

@@ -6,3 +6,7 @@ useDefault = true
 [[allowlists]]
 description = "Local virtual environments, ignored by git"
 paths = ['''(^|/)\.venv/''']
+
+[[allowlists]]
+description = "OpenTofu's downloads, ignored by git: providers and a full copy of the LiftBig repo per module"
+paths = ['''(^|/)\.terraform/''']
