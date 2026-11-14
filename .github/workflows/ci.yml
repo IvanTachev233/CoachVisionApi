@@ -106,11 +106,19 @@ jobs:
         working-directory: worker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # .python-version says 3.11: the newest 3.11 the runner image has, as the worker image's
+      # python:3.11 base (an exact patch goes missing when the runner's Ubuntu moves on).
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version-file: worker/.python-version
           cache: pip
           cache-dependency-path: worker/requirements*.txt
+      # The libraries OpenCV and MediaPipe link to, as in worker/Dockerfile (the runner image
+      # doesn't promise them), and ffmpeg for vision_eval.strip's tests, which skip without it.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libegl1 libgl1 libgles2 libglib2.0-0t64 libxcb1
       - name: Install (locked, with hashes)
         run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
       - run: ruff check
