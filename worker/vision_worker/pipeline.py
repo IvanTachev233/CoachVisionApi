@@ -29,7 +29,9 @@ def analyse(reader, pose, *, job_id, pose_model, mark=None, colour=True, partial
     for frame in reader:
         if tracker is None:
             height, width = frame.image.shape[:2]
-            tracker = BarTracker(width, height, colour=(colour and mark is not None) or (mark is None and proposer is not None))
+            tracker = BarTracker(
+                width, height, colour=(colour and mark is not None) or (mark is None and proposer is not None)
+            )
         landmarks = pose.detect(frame.image, frame.t)
         tracker.add(frame.image, landmarks)
         rows.append((frame.index, frame.t, landmarks))

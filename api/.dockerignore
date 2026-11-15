@@ -1,0 +1,8 @@
+# Only what the Dockerfile copies; never build output, tests or local settings.
+**/bin/
+**/obj/
+tests/
+**/.env
+**/.env.*
+**/*.user
+.vs/

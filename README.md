@@ -6,10 +6,81 @@ Video analysis for strength training: a client uploads a clip of a lift and gets
 | --- | --- |
 | `contracts/` | The public API (OpenAPI) and the worker's raw-output schema. See `contracts/README.md`. |
 | `worker/` | Python video worker: `vision_worker/` turns one clip into raw per-frame detections. `api.py` and `kinematics_engine.py` are the old proof of concept, which no longer runs (it needs MediaPipe's removed legacy API). |
-| `api/` | The API service. Empty until it is scaffolded. |
-| `infra/` | Google Cloud for Vision, managed with OpenTofu. See `infra/README.md`. |
+| `api/` | The API service: ASP.NET Core on .NET 10 (LTS). So far only `/health` and JSON logs. |
+| `infra/` | Google Cloud for Vision, managed with OpenTofu, and the deploy script. See `infra/README.md`. |
+| `.github/` | CI and deploys (`workflows/ci.yml`), Dependabot. |
 
 Clips and model weights never go in git; `.gitignore` blocks the usual file types.
+
+## API
+
+.NET SDK 10 (`api/global.json` takes the newest 10.0 SDK installed). From `api/`:
+
+```bash
+dotnet restore --locked-mode
+```
+
+```bash
+dotnet run --project src/CoachVision.Api
+```
+
+It answers `GET /health` with `Healthy`; nothing else yet. Logs are one JSON object per line on standard output, which Cloud Logging reads as structured entries (`severity`, `message`, `time`, `logger`, `fields`, `stack_trace`); the worker writes the same shape.
+
+Checks, as CI runs them (`dotnet format` without `--verify-no-changes` fixes the formatting):
+
+```bash
+dotnet format --verify-no-changes
+```
+
+```bash
+dotnet test
+```
+
+```bash
+dotnet package list --vulnerable --include-transitive
+```
+
+Restore also checks every package, direct and transitive, against nuget.org's advisories, and fails on any finding (`Directory.Build.props`). Package versions are in `Directory.Packages.props`; after changing one, run `dotnet restore` (not locked) to update the `packages.lock.json` files, and commit them.
+
+Tests use xUnit v3 on Microsoft Testing Platform (`global.json` sets the runner).
+
+## Images
+
+Each service has a multi-stage `Dockerfile` with base images pinned by digest, running as an unprivileged user on port 8080. From the repository root:
+
+```bash
+infra/ci/build-image.sh api
+```
+
+```bash
+infra/ci/build-image.sh worker
+```
+
+Each builds the image and checks that it starts and answers `/health`, as CI does. The worker image holds the Full pose model, downloaded at build time and checked against the SHA-256 pinned in `vision_worker/models.py`; it runs `python -m vision_worker.service`, which loads that model before `/health` answers. It has no plate proposer yet (V3c), so analyses in the image need `--finder shoulders`, `--mark` or a proposer from outside (as the timing run below).
+
+## CI and deploys
+
+`.github/workflows/ci.yml`, in the shape `test → build → deploy-staging → deploy-production`, as LiftBig's API (ADR 0023 there):
+
+- Pull requests: the API's and the worker's checks for the folders changed, then their images are built and started. The `ci-ok` job is the one check to require.
+- A merge to `main` builds both images once (or reuses the image of an unchanged folder, by its git tree) into the production registry and deploys both, by digest, to staging (environment `staging`).
+- A merge to `production` deploys the digests staging ran for the same `api/` and `worker/` content to production, after the `production` environment's required reviewer approves. Nothing is built for production.
+
+GitHub variables: `BUILD_WIF_PROVIDER` and `BUILD_SA` in the repository (the `github-builder` identity in production), `WIF_PROVIDER`, `DEPLOY_SA` and `GCP_PROJECT_ID` in each environment (its `github-deployer`). `infra/deploy.sh` is what both deploy jobs run.
+
+## Analysis time on 2 vCPU
+
+`vision_worker.bench` runs the worker on every clip in a folder, with the Full model and the default plate finder, and prints a table of analysis time against the bar of twice the clip's length (VS3). Clips first go through `vision_eval.strip`, on the machine that holds them: a copy with only the picture, no sound, location or other tags. From `worker/`:
+
+```bash
+.venv/bin/python -m vision_eval.strip /path/to/clips /path/to/stripped
+```
+
+```bash
+.venv/bin/python -m vision_worker.bench /path/to/stripped
+```
+
+On a laptop this shows only that the run works; the figure that counts is from the worker image on Cloud Run with 2 vCPU (`--proposer-dir` names the proposer's folder there).
 
 ## Worker setup
 
@@ -118,15 +189,25 @@ It follows as the worker does, by colour and by a part of the rim. `--no-colour`
 
 ## Checks
 
-From `worker/`:
+The worker's, as CI runs them. From `worker/` (`ruff format` without `--check` fixes the formatting):
 
 ```bash
 .venv/bin/ruff check
 ```
 
 ```bash
+.venv/bin/ruff format --check
+```
+
+```bash
 .venv/bin/pytest
 ```
+
+```bash
+.venv/bin/pip-audit --require-hashes --disable-pip -r requirements.txt
+```
+
+`pip-audit` checks the image's locked dependencies against known vulnerabilities without installing anything, and fails on any finding.
 
 Tests that need a real model file are skipped when it is missing. The run over the private evaluation clips only happens when it is told where they are; it checks every clip's output against the contract and can keep the outputs:
 

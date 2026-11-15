@@ -61,7 +61,6 @@ def build_document(*, job_id, pose_model, video, frames, bar_detector=BAR_DETECT
             "frameCount": video["frameCount"],
         },
         "frames": [
-            {"index": index, "t": round(t, 4), "bar": _bar(bar), "pose": _pose(pose)}
-            for index, t, bar, pose in frames
+            {"index": index, "t": round(t, 4), "bar": _bar(bar), "pose": _pose(pose)} for index, t, bar, pose in frames
         ],
     }

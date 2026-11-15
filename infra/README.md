@@ -7,6 +7,7 @@ This repository is public: no secrets, personal email addresses or billing ids i
 - `bootstrap.sh` makes what OpenTofu needs before it can run: the APIs the first plan calls and the state bucket. It stays outside OpenTofu so an apply can't lock itself out.
 - By hand: creating the projects and linking billing, budgets, Neon, secret values, GitHub environments and variables.
 - Cloud Run: this code owns each service's shape (scaling, CPU, memory, runtime identity, public or private); the deploy owns image, env vars, secret references and startup probe.
+- `deploy.sh` is the deploy: one service, one image by digest, with its startup probe on `/health`. CI runs it (`.github/workflows/ci.yml`); `ci/` has the scripts CI uses to build and check images and to check a deploy.
 
 | | staging | production |
 | --- | --- | --- |

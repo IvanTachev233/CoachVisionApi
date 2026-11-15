@@ -52,6 +52,7 @@ BONES = (
 )
 # python -m vision_worker.overlay ~/CoachVisionData/squats/squat_12.mp4 ~/CoachVisionData/raw-output/heavy/squat_12.json ~/CoachVisionData/new_outputs/heavy/squat_12-overlay.mp4 --bones
 
+
 class OverlayError(Exception):
     """The raw output can't be drawn over this video."""
 
@@ -92,7 +93,9 @@ def vertical_speeds(frames):
     speeds = []
     for i, frame in enumerate(frames):
         bar = frame["bar"]
-        around = [other for other in frames[max(i - SPEED_FRAMES, 0) : i + SPEED_FRAMES + 1] if other["bar"] is not None]
+        around = [
+            other for other in frames[max(i - SPEED_FRAMES, 0) : i + SPEED_FRAMES + 1] if other["bar"] is not None
+        ]
         if bar is None or len(around) < 2 or around[-1]["t"] <= around[0]["t"]:
             speeds.append(None)
             continue
@@ -122,7 +125,14 @@ def draw(image, frame, shrink, path, *, joints=True, bones=False, speed=None):
                 # A bone is drawn only between two points the model reported, never towards a guess.
                 if start in points and end in points and (sure[start] and sure[end]) == full:
                     colour = BONE_COLOUR if full else _faint(BONE_COLOUR)
-                    cv2.line(image, points[start], points[end], colour, thickness if full else max(thickness - 1, 1), cv2.LINE_AA)
+                    cv2.line(
+                        image,
+                        points[start],
+                        points[end],
+                        colour,
+                        thickness if full else max(thickness - 1, 1),
+                        cv2.LINE_AA,
+                    )
         if joints:
             for name, centre in points.items():
                 if sure[name] == full:

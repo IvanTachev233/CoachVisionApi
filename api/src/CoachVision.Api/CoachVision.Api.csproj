@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>CoachVision.Api</RootNamespace>
+    <!-- The image runs `dotnet CoachVision.Api.dll`; no native launcher is needed. -->
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+
+</Project>

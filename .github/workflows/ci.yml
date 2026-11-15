@@ -1,0 +1,308 @@
+name: CI
+
+# Build once and promote, as LiftBig's ADR 0023: a merge to main tests, builds the API and worker
+# images once and deploys both to staging; a merge to production promotes the digests staging ran
+# for the same api/ and worker/ content, after the production environment's approval. Nothing is
+# built for production.
+on:
+  pull_request:
+    branches: [main, production]
+  push:
+    branches: [main, production]
+  workflow_dispatch: # "Run workflow": on main redeploys staging, on production re-promotes
+
+permissions:
+  contents: read
+
+env:
+  # One registry, in production, for both projects (infra/envs/production); deploys are by digest.
+  REGISTRY: europe-west1-docker.pkg.dev/coachvision-prod/vision
+
+jobs:
+  # Path filtering happens here, not under `on:`: a workflow skipped by `paths` leaves its checks
+  # pending, which would block PRs that require ci-ok.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.diff.outputs.api }}
+      worker: ${{ steps.diff.outputs.worker }}
+      deploy: ${{ steps.diff.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=$PR_BASE head=$PR_HEAD ;;
+            push) base=$PUSH_BEFORE head=$GITHUB_SHA ;;
+            *) base='' head='' ;;
+          esac
+          # Manual runs, new branches and unknown bases test (and deploy) everything.
+          api=true worker=true
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$base...$head")
+            grep -qE '^(api/|infra/deploy\.sh$|infra/ci/|\.github/workflows/ci\.yml$)' <<<"$changed" || api=false
+            # The worker's tests read the raw-output schema in contracts/.
+            grep -qE '^(worker/|contracts/|infra/deploy\.sh$|infra/ci/|\.github/workflows/ci\.yml$)' <<<"$changed" || worker=false
+          fi
+          deploy=false
+          if [ "$api" = true ] || [ "$worker" = true ]; then deploy=true; fi
+          echo "api=$api" | tee -a "$GITHUB_OUTPUT"
+          echo "worker=$worker" | tee -a "$GITHUB_OUTPUT"
+          echo "deploy=$deploy" | tee -a "$GITHUB_OUTPUT"
+
+  test-api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: api/global.json
+          cache: true
+          cache-dependency-path: api/**/packages.lock.json
+      # Exactly the locked packages. Restore also audits them (Directory.Build.props): a known
+      # vulnerability of any severity fails here.
+      - run: dotnet restore --locked-mode
+      - name: Format (a difference fails; run `dotnet format` locally)
+        run: dotnet format --verify-no-changes --no-restore
+      - run: dotnet build --no-restore --configuration Release
+      - run: dotnet test --no-build --configuration Release
+      - name: Vulnerable packages, direct and transitive
+        run: |
+          dotnet package list --vulnerable --include-transitive --format json >"$RUNNER_TEMP/vulnerable.json"
+          if [ "$(jq '.problems // [] | length' "$RUNNER_TEMP/vulnerable.json")" -ne 0 ]; then
+            jq '.problems' "$RUNNER_TEMP/vulnerable.json"
+            echo "::error::dotnet package list reported problems; the check didn't run"
+            exit 1
+          fi
+          count=$(jq '[.projects[]? | .frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?)] | length' "$RUNNER_TEMP/vulnerable.json")
+          if [ "$count" -ne 0 ]; then
+            dotnet package list --vulnerable --include-transitive
+            echo "::error::$count vulnerable packages"
+            exit 1
+          fi
+          echo "No vulnerable packages."
+
+  test-worker:
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # .python-version says 3.11: the newest 3.11 the runner image has, as the worker image's
+      # python:3.11 base (an exact patch goes missing when the runner's Ubuntu moves on).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: worker/.python-version
+          cache: pip
+          cache-dependency-path: worker/requirements*.txt
+      # The libraries OpenCV and MediaPipe link to, as in worker/Dockerfile (the runner image
+      # doesn't promise them), and ffmpeg for vision_eval.strip's tests, which skip without it.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libegl1 libgl1 libgles2 libglib2.0-0t64 libxcb1
+      - name: Install (locked, with hashes)
+        run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+      - run: ruff check
+      - name: Format (a difference fails; run `ruff format` locally)
+        run: ruff format --check
+      # Model files and the evaluation clips aren't in CI: tests that need them are skipped. The
+      # image smoke test in build loads the Full model.
+      - run: pytest
+      - name: Vulnerable packages in the image's dependencies
+        run: pip-audit --require-hashes --disable-pip -r requirements.txt
+
+  # On pull requests: build the changed images and check each starts. On main: build both images
+  # (or reuse those of the same tree) and push them, so staging always runs a matching pair.
+  build:
+    needs: [changes, test-api, test-worker]
+    if: >-
+      !cancelled() && needs.changes.outputs.deploy == 'true' &&
+      (needs.test-api.result == 'success' || needs.test-api.result == 'skipped') &&
+      (needs.test-worker.result == 'success' || needs.test-worker.result == 'skipped') &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+    outputs:
+      api: ${{ steps.api.outputs.image }} # <REGISTRY>/api@sha256:…; empty on PRs
+      worker: ${{ steps.worker.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and start the API image (pull request)
+        if: github.event_name == 'pull_request' && needs.changes.outputs.api == 'true'
+        run: infra/ci/build-image.sh api
+      - name: Build and start the worker image (pull request)
+        if: github.event_name == 'pull_request' && needs.changes.outputs.worker == 'true'
+        run: infra/ci/build-image.sh worker
+      - if: github.event_name != 'pull_request'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          # github-builder: Artifact Registry Writer on the vision repo, nothing else
+          workload_identity_provider: ${{ vars.BUILD_WIF_PROVIDER }}
+          service_account: ${{ vars.BUILD_SA }}
+      - if: github.event_name != 'pull_request'
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - id: api
+        name: API image, built once per tree
+        if: github.event_name != 'pull_request'
+        run: infra/ci/build-image.sh api --push "$REGISTRY"
+      - id: worker
+        name: Worker image, built once per tree
+        if: github.event_name != 'pull_request'
+        run: infra/ci/build-image.sh worker --push "$REGISTRY"
+
+  deploy-staging:
+    needs: build
+    if: needs.build.outputs.api != '' && needs.build.outputs.worker != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging # deployment branch rule: main only
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false # never kill a deploy halfway; queue the next one
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      # Both services every time, so a successful staging deployment of a commit means that
+      # commit's api/ and worker/ both ran there (what release checks).
+      - name: Deploy the worker by digest
+        env:
+          IMAGE: ${{ needs.build.outputs.worker }}
+        run: infra/deploy.sh --service vision-worker --project "$GCP_PROJECT_ID" --image "$IMAGE"
+      - name: Deploy the API by digest
+        env:
+          IMAGE: ${{ needs.build.outputs.api }}
+        run: infra/deploy.sh --service vision-api --project "$GCP_PROJECT_ID" --image "$IMAGE"
+      - name: Smoke check
+        run: infra/ci/smoke-deployed.sh "$GCP_PROJECT_ID"
+
+  # Before anyone is asked to approve: the content production gets must have passed staging. Finds a
+  # successful staging deployment (GitHub creates one per deploy-staging job) of a commit with the
+  # same api/ and worker/ trees.
+  release:
+    needs: changes
+    if: >-
+      needs.changes.outputs.deploy == 'true' &&
+      github.ref == 'refs/heads/production' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      api-tree: ${{ steps.find.outputs.api-tree }}
+      worker-tree: ${{ steps.find.outputs.worker-tree }}
+      staged: ${{ steps.find.outputs.staged }} # the main commit staging ran
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # staging's commits are on main, merged into this branch
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api=$(git rev-parse HEAD:api)
+          worker=$(git rev-parse HEAD:worker)
+          echo "api-tree=$api" | tee -a "$GITHUB_OUTPUT"
+          echo "worker-tree=$worker" | tee -a "$GITHUB_OUTPUT"
+          staged=''
+          while read -r id sha; do
+            [ "$(git rev-parse --verify --quiet "$sha:api")" = "$api" ] || continue
+            [ "$(git rev-parse --verify --quiet "$sha:worker")" = "$worker" ] || continue
+            state=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" --jq '.[0].state')
+            if [ "$state" = success ]; then
+              staged=$sha
+              break
+            fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=staging&per_page=100" \
+            --jq '.[] | "\(.id) \(.sha)"')
+          if [ -z "$staged" ]; then
+            echo "::error::No successful staging deployment of api/ tree $api with worker/ tree $worker. Merge it to main and wait for deploy-staging; production never builds."
+            exit 1
+          fi
+          echo "Staging ran this content at $staged."
+          echo "staged=$staged" | tee -a "$GITHUB_OUTPUT"
+
+  deploy-production:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production # required reviewer; deployment branch rule: production only
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false # never kill a deploy halfway; queue the next one
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      API_TREE: ${{ needs.release.outputs.api-tree }}
+      WORKER_TREE: ${{ needs.release.outputs.worker-tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Deploy the digests staging ran
+        run: |
+          digest_of() {
+            gcloud artifacts docker images describe "$1" --format='value(image_summary.digest)'
+          }
+          for pair in "worker:$WORKER_TREE:vision-worker" "api:$API_TREE:vision-api"; do
+            IFS=: read -r component tree service <<<"$pair"
+            digest=$(digest_of "$REGISTRY/$component:tree-$tree")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No image for $component tree-$tree: '$digest'" >&2; exit 1; }
+            infra/deploy.sh --service "$service" --project "$GCP_PROJECT_ID" --image "$REGISTRY/$component@$digest"
+          done
+      - name: Smoke check
+        run: infra/ci/smoke-deployed.sh "$GCP_PROJECT_ID"
+
+  # The one check a ruleset should require: passes when every job it needs passed or was skipped by path.
+  ci-ok:
+    if: always()
+    needs: [changes, test-api, test-worker, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

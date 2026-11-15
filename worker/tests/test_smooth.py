@@ -70,7 +70,12 @@ def test_unsupported_rows_with_no_supported_ones_near_stay_as_measured():
 def pose_at(point, confidence=0.9, shoulder=(300.0, 200.0)):
     """A pose with one moving joint (a knee) and still shoulders and hips, TORSO apart."""
     sx, sy = shoulder
-    fixed = {"left_shoulder": (sx, sy), "right_shoulder": (sx, sy), "left_hip": (sx, sy + TORSO), "right_hip": (sx, sy + TORSO)}
+    fixed = {
+        "left_shoulder": (sx, sy),
+        "right_shoulder": (sx, sy),
+        "left_hip": (sx, sy + TORSO),
+        "right_hip": (sx, sy + TORSO),
+    }
     pose = {name: {"x": x, "y": y, "confidence": 0.95} for name, (x, y) in fixed.items()}
     if point is not None:
         pose["left_knee"] = {"x": float(point[0]), "y": float(point[1]), "confidence": confidence}
@@ -78,7 +83,10 @@ def pose_at(point, confidence=0.9, shoulder=(300.0, 200.0)):
 
 
 def knee(poses):
-    return [None if pose is None or "left_knee" not in pose else (pose["left_knee"]["x"], pose["left_knee"]["y"]) for pose in poses]
+    return [
+        None if pose is None or "left_knee" not in pose else (pose["left_knee"]["x"], pose["left_knee"]["y"])
+        for pose in poses
+    ]
 
 
 def test_a_wobbly_joint_ends_up_close_to_the_way_it_goes():
@@ -168,7 +176,12 @@ def lifter(points, confidences=None, shoulders=None):
     poses = []
     for i in range(count):
         sx, sy = shoulders[i] if shoulders is not None else (300.0, 200.0)
-        fixed = {"left_shoulder": (sx, sy), "right_shoulder": (sx, sy), "left_hip": (sx, sy + TORSO), "right_hip": (sx, sy + TORSO)}
+        fixed = {
+            "left_shoulder": (sx, sy),
+            "right_shoulder": (sx, sy),
+            "left_hip": (sx, sy + TORSO),
+            "right_hip": (sx, sy + TORSO),
+        }
         pose = {name: {"x": float(x), "y": float(y), "confidence": 0.95} for name, (x, y) in fixed.items()}
         for name, path in points.items():
             confidence = 0.9 if confidences is None else confidences[name][i]

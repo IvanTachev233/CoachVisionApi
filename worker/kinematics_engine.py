@@ -26,6 +26,7 @@ from scipy.signal import butter, filtfilt
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
+
 def calculate_angle(a, b, c):
     """
     Calculate the interior 2D angle at vertex **b** formed by points a-b-c.
@@ -56,6 +57,7 @@ def calculate_angle(a, b, c):
 # ---------------------------------------------------------------------------
 # Core analysis function
 # ---------------------------------------------------------------------------
+
 
 def analyze_squat_video(
     video_path: str,
@@ -125,27 +127,27 @@ def analyze_squat_video(
     delta_time = 1.0 / fps
 
     # -- Tracking variables -------------------------------------------------
-    lowest_hip_y = 0.0          # highest numerical Y seen (= deepest physical position)
-    angle_at_bottom = None      # knee angle recorded at the deepest hip position
-    depth_achieved = False      # flipped to True the first time hip_y > knee_y
+    lowest_hip_y = 0.0  # highest numerical Y seen (= deepest physical position)
+    angle_at_bottom = None  # knee angle recorded at the deepest hip position
+    depth_achieved = False  # flipped to True the first time hip_y > knee_y
     total_frames = 0
     frames_with_pose = 0
 
     # -- Phase 2 & 3: VBT tracking variables --------------------------------
-    pixel_to_meter_ratio: float | None = None   # set on first pose frame
-    prev_barbell_y: float | None = None         # normalised Y of previous frame
-    barbell_y_buffer: list[float] = []          # rolling window for smoothing
-    SMOOTHING_WINDOW = 5                        # frames to average over
-    MAX_VELOCITY = 3.0                          # m/s — physical ceiling for a squat
-    MIN_VELOCITY = 0.05                         # m/s — below this is noise, not movement
-    concentric_velocities: list[float] = []     # instantaneous upward velocities (m/s)
-    concentric_distance_m = 0.0                 # cumulative upward distance (metres)
-    concentric_time_s = 0.0                     # cumulative time spent moving up (s)
-    current_velocity = 0.0                      # latest instantaneous velocity for overlay
-    velocity_history: list[float] = []          # all frame velocities for graph
-    GRAPH_HEIGHT = 100                          # pixels for the velocity graph
-    GRAPH_MAX_POINTS = 150                      # max data points shown on graph
-    playback_delay = 10                         # ms between frames (preview only)
+    pixel_to_meter_ratio: float | None = None  # set on first pose frame
+    prev_barbell_y: float | None = None  # normalised Y of previous frame
+    barbell_y_buffer: list[float] = []  # rolling window for smoothing
+    SMOOTHING_WINDOW = 5  # frames to average over
+    MAX_VELOCITY = 3.0  # m/s — physical ceiling for a squat
+    MIN_VELOCITY = 0.05  # m/s — below this is noise, not movement
+    concentric_velocities: list[float] = []  # instantaneous upward velocities (m/s)
+    concentric_distance_m = 0.0  # cumulative upward distance (metres)
+    concentric_time_s = 0.0  # cumulative time spent moving up (s)
+    current_velocity = 0.0  # latest instantaneous velocity for overlay
+    velocity_history: list[float] = []  # all frame velocities for graph
+    GRAPH_HEIGHT = 100  # pixels for the velocity graph
+    GRAPH_MAX_POINTS = 150  # max data points shown on graph
+    playback_delay = 10  # ms between frames (preview only)
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -213,7 +215,9 @@ def analyze_squat_video(
                 plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_OPEN, kernel)
 
                 contours, _ = cv2.findContours(
-                    plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+                    plate_mask,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
                 )
 
                 # Filter: area + circularity (plates are round-ish)
@@ -288,7 +292,9 @@ def analyze_squat_video(
             # -- Visual overlay (only when preview is enabled) -------------
             if show_preview:
                 mp_drawing.draw_landmarks(
-                    image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+                    image,
+                    results.pose_landmarks,
+                    mp_pose.POSE_CONNECTIONS,
                 )
 
                 # Live knee angle near the knee joint
@@ -363,12 +369,19 @@ def analyze_squat_video(
                             cv2.line(image, (x_prev, y_prev), (x_curr, y_curr), color, 2)
 
                         # Labels
-                        cv2.putText(image, f"+{MAX_VELOCITY:.1f}", (5, graph_y_top + 15),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-                        cv2.putText(image, f"-{MAX_VELOCITY:.1f}", (5, h - 5),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-                        cv2.putText(image, "0", (5, zero_y - 5),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+                        cv2.putText(
+                            image,
+                            f"+{MAX_VELOCITY:.1f}",
+                            (5, graph_y_top + 15),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            (200, 200, 200),
+                            1,
+                        )
+                        cv2.putText(
+                            image, f"-{MAX_VELOCITY:.1f}", (5, h - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1
+                        )
+                        cv2.putText(image, "0", (5, zero_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
                         # Min/Max concentric markers on the graph
                         concentric_in_window = [(i, v) for i, v in enumerate(points) if v >= MIN_VELOCITY]
@@ -380,31 +393,45 @@ def analyze_squat_video(
                             max_px = int(max_i * step_x)
                             max_py = int(zero_y - (max_v / MAX_VELOCITY) * (GRAPH_HEIGHT // 2))
                             cv2.drawMarker(image, (max_px, max_py), (255, 255, 0), cv2.MARKER_DIAMOND, 12, 2)
-                            cv2.putText(image, f"Peak: {max_v:.2f}", (max_px + 8, max_py - 5),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+                            cv2.putText(
+                                image,
+                                f"Peak: {max_v:.2f}",
+                                (max_px + 8, max_py - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4,
+                                (255, 255, 0),
+                                1,
+                            )
 
                             # Min marker (magenta diamond)
                             min_px = int(min_i * step_x)
                             min_py = int(zero_y - (min_v / MAX_VELOCITY) * (GRAPH_HEIGHT // 2))
                             cv2.drawMarker(image, (min_px, min_py), (255, 0, 255), cv2.MARKER_DIAMOND, 12, 2)
-                            cv2.putText(image, f"Min: {min_v:.2f}", (min_px + 8, min_py + 15),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
+                            cv2.putText(
+                                image,
+                                f"Min: {min_v:.2f}",
+                                (min_px + 8, min_py + 15),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4,
+                                (255, 0, 255),
+                                1,
+                            )
 
         if show_preview:
             cv2.imshow("Squat Analysis", image)
             key = cv2.waitKey(playback_delay) & 0xFF
             if key == ord("q"):
                 break
-            elif key == ord(" "):          # Space = pause / resume
+            elif key == ord(" "):  # Space = pause / resume
                 while True:
                     key2 = cv2.waitKey(0) & 0xFF
                     if key2 == ord(" ") or key2 == ord("q"):
                         break
                 if key2 == ord("q"):
                     break
-            elif key == ord(","):           # , = slow down
+            elif key == ord(","):  # , = slow down
                 playback_delay = min(playback_delay + 20, 500)
-            elif key == ord("."):           # . = speed up
+            elif key == ord("."):  # . = speed up
                 playback_delay = max(playback_delay - 20, 1)
 
     # -- Cleanup -------------------------------------------------- ----------
@@ -453,6 +480,7 @@ def analyze_squat_video(
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main():
     """Run analysis on a default video and print results to the console."""

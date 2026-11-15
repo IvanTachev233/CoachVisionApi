@@ -263,7 +263,12 @@ def test_help_lists_both_switches(capsys):
 
 def bar_frames(heights, radius=90.0, rate=30.0):
     return [
-        {"index": i, "t": i / rate, "pose": None, "bar": None if y is None else {"x": 300.0, "y": y, "radiusPx": radius, "confidence": 0.5}}
+        {
+            "index": i,
+            "t": i / rate,
+            "pose": None,
+            "bar": None if y is None else {"x": 300.0, "y": y, "radiusPx": radius, "confidence": 0.5},
+        }
         for i, y in enumerate(heights)
     ]
 

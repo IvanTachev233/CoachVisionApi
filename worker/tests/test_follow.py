@@ -332,10 +332,15 @@ def test_a_partly_covered_plate_is_lost_without_the_option_and_followed_with_it(
     without = tracker_for(frames).follow(*mark)
     bars = tracker_for(frames).follow(*mark, partial_rim=True)
 
-    assert sum(bar is not None for bar in without[10:]) <= 0.2 * (FRAMES - 10)
-    # 0.75, not 0.8 (Ivan, 2026-11-11): stray frames, up to 12 pixels off the plate, used to count
-    # towards this; the track's mending now drops them, which leaves 39 of the 50.
-    assert sum(bar is not None for bar in bars[10:]) >= 0.75 * (FRAMES - 10)
+    lost = sum(bar is not None for bar in without[10:])
+    kept = sum(bar is not None for bar in bars[10:])
+    assert lost <= 0.2 * (FRAMES - 10)
+    # 0.6 and a gap of 25, not 0.75 (Ivan, 2026-11-14; 0.8 before 2026-11-11): the frame where the
+    # follower loses this arc moves with the CPU's arithmetic, in OpenCV's drawing of the scene and
+    # in the follower itself. Seen: 39 of the 50 on arm64, 33-34 on x86-64, 3 without the option on
+    # both. What is tested is that the option is what keeps the plate.
+    assert kept >= 0.6 * (FRAMES - 10)
+    assert kept - lost >= 25
     assert statistics.median(errors(bars[10:], centres[10:])) <= 6.0
     assert statistics.median(bar.radius_px for bar in bars[10:] if bar is not None) == pytest.approx(RADIUS, rel=0.08)
 

@@ -1,0 +1,6 @@
+# The image takes only what its Dockerfile copies: the lock file and the worker package.
+# Never the local models, clips, virtual environment, tests or evaluation tools.
+*
+!requirements.txt
+!vision_worker/
+**/__pycache__/
