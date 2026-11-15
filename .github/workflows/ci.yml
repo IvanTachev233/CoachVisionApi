@@ -80,6 +80,31 @@ jobs:
         run: dotnet format --verify-no-changes --no-restore
       - run: dotnet build --no-restore --configuration Release
       - run: dotnet test --no-build --configuration Release
+      # dotnet test above already applies every migration to an empty Postgres (Testcontainers,
+      # one per Data test run) and would fail a model change with no matching migration
+      # (Database.HasPendingModelChanges in CoachVision.Data.Tests). This step repeats the model
+      # check with the tool EF's own docs recommend for CI, against a second, disposable
+      # Postgres, so a drift between the compiled model and the checked-in migrations fails the
+      # build even if someone changes the test later.
+      - name: "Vision database: pending model changes (drift check)"
+        run: |
+          docker run -d --name vision-ci-db -e POSTGRES_PASSWORD=ci-only -p 55432:5432 postgres:17-alpine
+          for _ in $(seq 1 30); do
+            docker exec vision-ci-db pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          dotnet tool restore
+          # --configuration must match the build above: dotnet-ef defaults to Debug, and
+          # --no-build against the wrong configuration's output silently runs stale migrations.
+          VISIONDB_DESIGN_TIME_CONNECTION_STRING="Host=localhost;Port=55432;Database=postgres;Username=postgres;Password=ci-only" \
+            dotnet tool run dotnet-ef database update \
+            --project src/CoachVision.Data --startup-project src/CoachVision.Data \
+            --configuration Release --no-build
+          VISIONDB_DESIGN_TIME_CONNECTION_STRING="Host=localhost;Port=55432;Database=postgres;Username=postgres;Password=ci-only" \
+            dotnet tool run dotnet-ef migrations has-pending-model-changes \
+            --project src/CoachVision.Data --startup-project src/CoachVision.Data \
+            --configuration Release --no-build
+          docker rm -f vision-ci-db
       - name: Vulnerable packages, direct and transitive
         run: |
           dotnet package list --vulnerable --include-transitive --format json >"$RUNNER_TEMP/vulnerable.json"

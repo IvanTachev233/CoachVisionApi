@@ -6,4 +6,8 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\CoachVision.Data\CoachVision.Data.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -8,6 +8,7 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e9
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props .editorconfig ./
 COPY src/CoachVision.Api/CoachVision.Api.csproj src/CoachVision.Api/packages.lock.json src/CoachVision.Api/
+COPY src/CoachVision.Data/CoachVision.Data.csproj src/CoachVision.Data/packages.lock.json src/CoachVision.Data/
 # Exactly the locked packages; the restore also runs the vulnerable-package audit.
 RUN dotnet restore src/CoachVision.Api --locked-mode
 COPY src/ src/
