@@ -54,7 +54,7 @@ module "api" {
   name                    = "vision-api"
   runtime_sa_id           = "vision-api-runtime"
   runtime_sa_display_name = "vision-api-runtime"
-  secrets                 = [] # the database secret comes with V4a, named as its code reads it
+  secrets                 = ["vision-db-connection-string"] # V4a; the runbook has Ivan put a value in once the role exists
   max_instances           = 5
 
   depends_on = [google_project_service.this]

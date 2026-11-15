@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Shared test infrastructure, not a test project itself: no xUnit entry point, so other test
+         projects (CoachVision.Data.Tests, CoachVision.Api.Tests) can reference it without each
+         running its own copy. -->
+    <RootNamespace>CoachVision.TestSupport</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CoachVision.Data\CoachVision.Data.csproj" />
+  </ItemGroup>
+
+</Project>

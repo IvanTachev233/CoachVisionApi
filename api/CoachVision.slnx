@@ -1,8 +1,14 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/CoachVision.Analysis/CoachVision.Analysis.csproj" />
     <Project Path="src/CoachVision.Api/CoachVision.Api.csproj" />
+    <Project Path="src/CoachVision.Cli/CoachVision.Cli.csproj" />
+    <Project Path="src/CoachVision.Data/CoachVision.Data.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CoachVision.Analysis.Tests/CoachVision.Analysis.Tests.csproj" />
     <Project Path="tests/CoachVision.Api.Tests/CoachVision.Api.Tests.csproj" />
+    <Project Path="tests/CoachVision.Data.Tests/CoachVision.Data.Tests.csproj" />
+    <Project Path="tests/CoachVision.TestSupport/CoachVision.TestSupport.csproj" />
   </Folder>
 </Solution>

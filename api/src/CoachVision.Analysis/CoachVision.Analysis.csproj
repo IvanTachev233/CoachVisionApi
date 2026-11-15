@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Pure rep/velocity/depth engine over the worker's raw output (ADR 0017, choice 2A).
+         No database or web dependency: it is a library the API project will call later. -->
+    <RootNamespace>CoachVision.Analysis</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets the test project unit-test internal helpers (the velocity window's boundary
+         detection) directly, instead of only indirectly through the public engine. -->
+    <InternalsVisibleTo Include="CoachVision.Analysis.Tests" />
+  </ItemGroup>
+
+</Project>
