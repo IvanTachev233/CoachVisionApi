@@ -11,11 +11,14 @@ COPY requirements.txt /tmp/requirements.txt
 RUN /opt/venv/bin/pip install --require-hashes --no-deps -r /tmp/requirements.txt
 
 # Stage 2: the Full pose model. The build stops if the file isn't the one pinned in
-# vision_worker/models.py (MODEL_SHA256["full"]); change both together. Version 3 is the file
-# the evaluation ran with (it was "latest" then; versions 1 and 2 are other files).
+# vision_worker/models.py (MODEL_SHA256["full"]); change both together. The evaluation ran with
+# Google's "latest" file (README, Model files); the numbered versions 1 to 3 are other files. If
+# Google moves "latest" the build stops here: the pinned file then has to come from a copy of ours.
+# A local build doesn't check the URL once the file is in Docker's cache, which is keyed by the
+# checksum: only a build without that cache does, as CI's.
 FROM scratch AS models
 ADD --chmod=444 --checksum=sha256:4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad \
-    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/3/pose_landmarker_full.task \
+    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task \
     /models/pose_landmarker_full.task
 
 # Stage 3: runtime.
