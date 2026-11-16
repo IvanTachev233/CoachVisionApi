@@ -199,7 +199,12 @@ jobs:
 
   deploy-staging:
     needs: build
-    if: needs.build.outputs.api != '' && needs.build.outputs.worker != ''
+    # !cancelled() is what lets this run when a test job further up was skipped by path: without a
+    # status function GitHub applies success(), which a skip anywhere in the chain turns false, so a
+    # change to only api/ or only worker/ was built and never deployed.
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      needs.build.outputs.api != '' && needs.build.outputs.worker != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging # deployment branch rule: main only
