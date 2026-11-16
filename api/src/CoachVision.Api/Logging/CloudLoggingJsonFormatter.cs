@@ -13,7 +13,7 @@ namespace CoachVision.Api.Logging;
 /// </summary>
 public sealed class CloudLoggingJsonFormatter() : ConsoleFormatter(FormatterName)
 {
-    public const string FormatterName   =  "cloud-json";
+    public const string FormatterName = "cloud-json";
 
     private const string TemplateKey = "{OriginalFormat}";
 
