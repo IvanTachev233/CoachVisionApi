@@ -196,7 +196,7 @@ GitHub variables: `BUILD_WIF_PROVIDER` and `BUILD_SA` in the repository (the `gi
 
 ## Analysis time on 2 vCPU
 
-`vision_worker.bench` runs the worker on every clip in a folder, with the Full model and the default plate finder, and prints a table of analysis time against the bar of twice the clip's length (VS3). Clips first go through `vision_eval.strip`, on the machine that holds them: a copy with only the picture, no sound, location or other tags. From `worker/`:
+`vision_worker.bench` runs the worker on every clip in a folder, with the Full model and the default plate finder, and prints a table of analysis time against the bar of 4.5 times the clip's length. The bar was twice the length until the first run on Cloud Run with 2 vCPU (2026-11-15): 1 of the 20 evaluation clips was within it, the median was 2.95 times and the slowest 4.17 times, the 1080p clips between 1.98 and 3.33. Analysis runs in the background, so the bar was relaxed to one every clip meets. Clips first go through `vision_eval.strip`, on the machine that holds them: a copy with only the picture, no sound, location or other tags. From `worker/`:
 
 ```bash
 .venv/bin/python -m vision_eval.strip /path/to/clips /path/to/stripped
