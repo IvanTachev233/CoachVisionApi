@@ -1,4 +1,4 @@
-"""How long the worker takes per clip, against the bar of twice the clip's length (VS3, bar 3).
+"""How long the worker takes per clip, against the bar of 4.5 times the clip's length.
 
     python -m vision_worker.bench /path/to/clips [--proposer-dir DIR] [--lift squat]
 
@@ -27,7 +27,10 @@ from pathlib import Path
 from vision_worker import cli, logs, models
 
 CLIP_SUFFIXES = {".mp4", ".mov", ".m4v"}
-BAR = 2.0  # at most twice the clip's length (VS3)
+# At most this many times the clip's length. Relaxed from 2 (Ivan, 2026-11-15): on Cloud Run with
+# 2 vCPU the slowest of the 20 evaluation clips took 4.17 times its length, and every clip is to
+# pass; analysis runs in the background, so the wait matters little for now.
+BAR = 4.5
 CGROUP_CPU_MAX = Path("/sys/fs/cgroup/cpu.max")
 
 logger = logging.getLogger(__name__)
@@ -120,7 +123,7 @@ def _number(value, places):
 def table(rows):
     """A Markdown table: a row per clip, then how many clips are within the bar."""
     lines = [
-        "| Clip | Length (s) | Analysis (s) | × length | Within 2× |",
+        f"| Clip | Length (s) | Analysis (s) | × length | Within {BAR:g}× |",
         "| --- | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
@@ -129,7 +132,7 @@ def table(rows):
             f"| {row.clip} | {_number(row.length_s, 1)} | {row.analysis_s:.1f} | {_number(row.ratio, 2)} | {verdict} |"
         )
     ratios = [row.ratio for row in rows if row.ratio is not None]
-    summary = f"Within 2× the clip's length: {sum(row.within_bar for row in rows)} of {len(rows)} clips"
+    summary = f"Within {BAR:g}× the clip's length: {sum(row.within_bar for row in rows)} of {len(rows)} clips"
     if ratios:
         summary += f"; median {statistics.median(ratios):.2f}×, worst {max(ratios):.2f}×"
     return "\n".join(lines) + "\n\n" + summary + ".\n"

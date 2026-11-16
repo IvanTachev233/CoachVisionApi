@@ -1,14 +1,15 @@
 openapi: 3.1.1
 info:
   title: Vision API
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   summary: Lift video analysis for apps that track strength training.
   description: |
     Vision analyses short lift videos and returns bar path, bar velocity,
     rep count and verification checks, each with a confidence or an explicit
     `unanalysable` outcome with a reason.
 
-    **Draft (V0b, 2026-11-08; additions V0c, 2026-11-09).** Written from ADR 0017 (Vision as a product,
+    **Draft (V0b, 2026-11-08; additions V0c, 2026-11-09; additions V0d, 2026-11-15).**
+    Written from ADR 0017 (Vision as a product,
     LiftBig its first tenant) and its V0 decision. It moves to the Vision
     repository's `contracts/` when that repository is created (V1). The
     product name and host are not decided yet (ADR 0016), so "Vision" and the
@@ -28,6 +29,10 @@ info:
     5. A `completed` job also returns `playback`, a short-lived URL for the
        video. The tenant can send its end user's opinion of the result with
        `POST /v1/jobs/{jobId}/labels`.
+    6. If no plate was found, or the found one was wrong, the tenant can mark
+       it on one frame and send `POST /v1/jobs/{jobId}/reanalysis`. Vision
+       analyses the same stored video again from the mark and sends a fresh
+       `job.completed` or `job.failed` webhook.
 
     ## Compatibility
 
@@ -168,6 +173,12 @@ paths:
                   $ref: '#/components/examples/CompletedJob'
                 unanalysable:
                   $ref: '#/components/examples/UnanalysableJob'
+                marked:
+                  $ref: '#/components/examples/MarkedJob'
+                barTrackMismatch:
+                  $ref: '#/components/examples/BarTrackMismatchJob'
+                markedPlatesNotFound:
+                  $ref: '#/components/examples/MarkedPlatesNotFoundJob'
                 failed:
                   $ref: '#/components/examples/FailedJob'
         '401':
@@ -181,8 +192,8 @@ paths:
       operationId: deleteJob
       summary: Delete a job
       description: |
-        Deletes the job's video, raw outputs, results and label. From the response
-        on, the job is never served again (`404`); removal from storage
+        Deletes the job's video, raw outputs, results, label and any mark.
+        From the response on, the job is never served again (`404`); removal from storage
         finishes asynchronously. A usage record without content (tenant,
         features analysed, time) is kept for billing. Deleting a job that
         is already deleted, or never existed, is also a `404`.
@@ -210,7 +221,9 @@ paths:
         A label doesn't change the results or what is billed. Labels are
         used to measure accuracy, and for training only together with a
         video whose `trainingAllowed` is true. A label is deleted with its
-        job.
+        job, and also by `POST /v1/jobs/{jobId}/reanalysis`: it judged a
+        result that no longer exists, so a new one can be sent once the job
+        is `completed` again.
       requestBody:
         required: true
         content:
@@ -250,6 +263,174 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/JobNotCompleted'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /v1/jobs/{jobId}/reanalysis:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    post:
+      tags: [Jobs]
+      operationId: reanalyseJob
+      summary: Analyse the job's video again from a marked plate
+      description: |
+        Only on a `completed` job. Takes a `mark` — one frame's plate centre
+        and a point on its rim, in `playback` pixels and seconds on its
+        timeline — and analyses the same stored video again, following the
+        plate from that mark instead of trying to find it automatically.
+        Marking is for when Vision found no plate (`plates_not_found`), found
+        the wrong one (`bar_track_mismatch`), or the end user says the plate
+        shown is wrong; it is never required before a job's first analysis.
+
+        Accepting the mark immediately removes the job's current results and
+        label and moves its `status` back to `queued`; `GET /v1/jobs/{jobId}`
+        shows no `results` until it completes again, exactly as after the
+        first upload. The removed label judged a result that no longer
+        exists; the tenant may send a new one once the job is `completed`
+        again. Vision then sends a `job.completed` or `job.failed` webhook
+        as usual, with `data.reanalysis: true` so the tenant can tell it from
+        a first analysis. `rep_count` is not affected by the mark (it never
+        used the plate); `bar_path` and `velocity` are re-run, and may still
+        come back `unanalysable` if the plate can't be followed from the mark
+        either.
+
+        A mark belongs to the job's data: it is deleted with the job (or the
+        subject) and used for training only while the job's
+        `trainingAllowed` is true, as the video itself is.
+
+        A job accepts at most 3 marked analyses; `marksRemaining` on the job
+        counts down from 3 so a client can hide the control once it reaches
+        0. A marked analysis is not billed again: billing is per video, once
+        per feature that ends `analysed`, no matter how many times it is
+        analysed.
+
+        A mark can't help a job that requested neither `bar_path` nor
+        `velocity`, or whose `lift` isn't analysed (only `squat` is, in v1):
+        `422 reanalysis_not_applicable`, and no mark is spent.
+
+        Checks run in this order, each only once the one before it passes:
+        the job must be `completed` (else `409 job_not_completed`); the
+        re-analysis must be applicable to this job (else
+        `422 reanalysis_not_applicable`); the job must have a mark left
+        (else `409 marks_exhausted`); the mark itself must be valid (else
+        `422 invalid_mark`). Only a mark that passes all four, and is then
+        accepted, counts against `marksRemaining`.
+
+        Send an `Idempotency-Key` to retry safely: the same key with the same
+        body within 24 hours returns the original `202` again without
+        starting a second analysis or spending another of the 3 marks; the
+        same key with a different body is a `409`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReanalysisRequest'
+            examples:
+              marked:
+                summary: The plate marked on the frame at 2.1 seconds
+                value:
+                  mark:
+                    t: 2.1
+                    centre: { px: 560, py: 1180 }
+                    rim: { px: 560, py: 1120 }
+      responses:
+        '202':
+          description: |
+            The mark is accepted. The job is back in a non-terminal `status`
+            with no `results`; read it again, or wait for the webhook, once
+            it completes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              examples:
+                accepted:
+                  summary: Accepted, queued for reanalysis
+                  value:
+                    id: job_01JC8ZB3N4M5K6J7H8G9F0E1DC
+                    status: queued
+                    schemaVersion: '1.0'
+                    lift: squat
+                    features: [bar_path, velocity, rep_count, verification_checks]
+                    subjectId: sub_7f3c9a12
+                    trainingAllowed: true
+                    equipment:
+                      plateDiameterMm: 450
+                    clientReference: set_48214
+                    marksRemaining: 2
+                    createdAt: '2026-11-08T10:20:11Z'
+                    updatedAt: '2026-11-15T09:05:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The job can't be reanalysed right now: it isn't `completed`
+            (still being analysed, including by an earlier reanalysis still
+            in progress, or `failed`); the job has already used its 3 marked
+            analyses; or the `Idempotency-Key` was already used with a
+            different request body.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                jobNotCompleted:
+                  summary: The job isn't completed yet
+                  value:
+                    type: https://vision-api.invalid/problems/job-not-completed
+                    title: Job not completed
+                    status: 409
+                    code: job_not_completed
+                marksExhausted:
+                  summary: All 3 marked analyses are used
+                  value:
+                    type: https://vision-api.invalid/problems/marks-exhausted
+                    title: No marked analyses left
+                    status: 409
+                    code: marks_exhausted
+                    detail: This job has already been reanalysed 3 times.
+                idempotencyConflict:
+                  summary: The idempotency key was reused with a different mark
+                  value:
+                    type: https://vision-api.invalid/problems/idempotency-conflict
+                    title: Idempotency key reused
+                    status: 409
+                    code: idempotency_conflict
+        '422':
+          description: |
+            The mark isn't valid for this video, or marking can't help this
+            job: it requested neither `bar_path` nor `velocity`, or its
+            `lift` isn't analysed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                invalidMark:
+                  summary: The mark is outside the video
+                  value:
+                    type: https://vision-api.invalid/problems/invalid-mark
+                    title: Invalid mark
+                    status: 422
+                    code: invalid_mark
+                    detail: 'mark.rim: is outside the video.'
+                    errors:
+                      - pointer: /mark/rim
+                        detail: 'px 1400 is past the video''s width, 1080.'
+                reanalysisNotApplicable:
+                  summary: Marking can't change this job's results
+                  value:
+                    type: https://vision-api.invalid/problems/reanalysis-not-applicable
+                    title: Reanalysis not applicable
+                    status: 422
+                    code: reanalysis_not_applicable
+                    detail: This job's lift is "deadlift", which v1 doesn't analyse.
         '429':
           $ref: '#/components/responses/TooManyRequests'
   /v1/subjects/{subjectId}:
@@ -351,6 +532,18 @@ webhooks:
                     status: completed
                     subjectId: sub_7f3c9a12
                     clientReference: set_48213
+              completedAfterMark:
+                summary: Job completed, after a marked analysis
+                value:
+                  id: evt_01JC9C5G7J9M1P3R5T7V9X1Z3B
+                  type: job.completed
+                  createdAt: '2026-11-15T09:05:12Z'
+                  data:
+                    jobId: job_01JC8ZB3N4M5K6J7H8G9F0E1DC
+                    status: completed
+                    subjectId: sub_7f3c9a12
+                    clientReference: set_48214
+                    reanalysis: true
       responses:
         '200':
           description: Received. Any `2xx` stops retries.
@@ -420,7 +613,7 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: A unique key per intended job (a UUID works), kept for 24 hours.
+      description: A unique key per intended request (a UUID works), kept for 24 hours.
       schema:
         type: string
         minLength: 8
@@ -595,7 +788,12 @@ components:
         Why a feature or job has no result. Known values:
         `lift_not_supported` (the lift isn't analysed yet),
         `plates_not_found` (no plate found in enough frames to scale or track
-        the bar; v1 detects red and blue bumper plates only),
+        the bar),
+        `bar_track_mismatch` (a plate was found, but the reps it traces
+        disagree with the reps counted from the lifter's shoulders, so it
+        isn't moving with the lifter; `rep_count` still comes from the
+        shoulders, but `bar_path` and `velocity` are withheld. The remedy is
+        `POST /v1/jobs/{jobId}/reanalysis` with the plate marked by hand),
         `pose_not_found` (the lifter's body isn't visible enough),
         `no_reps_detected`,
         `low_confidence` (a result was produced but below Vision's minimum
@@ -805,6 +1003,50 @@ components:
           $ref: '#/components/schemas/Playback'
         failure:
           $ref: '#/components/schemas/Failure'
+        plateSource:
+          allOf:
+            - $ref: '#/components/schemas/PlateSource'
+          description: |
+            Present, together with `plateAccepted` and `plateCircle`, on a
+            `completed` job whenever Vision found a plate or a mark was
+            given, whatever came of it. `detected` is Vision's own find;
+            `marked` is the last mark sent to
+            `POST /v1/jobs/{jobId}/reanalysis`, even when the plate couldn't
+            be followed from it (`plateAccepted` is then false). Absent when
+            no plate was found and no mark was given (`plates_not_found` on
+            a job never marked), when the job's `lift` isn't analysed, when
+            the job requested neither `bar_path` nor `velocity`, and on a job
+            that isn't `completed`.
+        plateAccepted:
+          type: boolean
+          description: |
+            Whether `plateCircle` is the plate `bar_path` and `velocity`
+            were scaled and tracked from. True when they were measured from
+            it. False when it was not used, for either reason: its rep
+            count disagreed with the shoulders' (`bar_track_mismatch`), or
+            it couldn't be followed in enough frames
+            (`plates_not_found`, after a mark). Each feature's own `reason`
+            says which. Present exactly when `plateSource` is (see its
+            description).
+        plateCircle:
+          allOf:
+            - $ref: '#/components/schemas/PlateCircle'
+          description: |
+            For `plateSource: marked`, the mark exactly as given (`centre`
+            and a radius from `rim`, at the mark's own `t`), whether or not
+            it was used. For `detected`, where Vision found the plate.
+            Present exactly when `plateSource` is (see its description).
+        marksRemaining:
+          type: integer
+          description: |
+            How many more times `POST /v1/jobs/{jobId}/reanalysis` will
+            accept a mark for this job, counting down from 3 as each one is
+            accepted; 0 once used up. Present once the video has arrived
+            (`queued`, `processing` or `completed`); absent while
+            `awaiting_upload` and on a `failed` job, which has no result to
+            mark.
+          minimum: 0
+          maximum: 3
     CreatedJob:
       description: A newly created job plus its upload instructions.
       allOf:
@@ -867,6 +1109,82 @@ components:
           type: string
           format: date-time
           description: When the URL stops working. Use this, not a fixed duration.
+    PixelPoint:
+      type: object
+      description: A point on the `playback` video, in pixels from its top-left corner.
+      required: [px, py]
+      properties:
+        px:
+          type: number
+          description: Pixels from the left edge.
+          minimum: 0
+        py:
+          type: number
+          description: Pixels from the top edge.
+          minimum: 0
+    PlateSource:
+      type: string
+      description: |
+        How the plate Vision used for `bar_path` and `velocity` was found.
+        `detected`: Vision found it by itself. `marked`: the tenant sent it
+        with `POST /v1/jobs/{jobId}/reanalysis`. New values may be added.
+      enum: [detected, marked]
+      examples: [detected]
+    PlateCircle:
+      type: object
+      description: |
+        The plate's circle on the `playback` video, in its pixels, for a
+        client to draw over it so the end user can judge it. For
+        `plateSource: marked` this is the user's own mark; for `detected` it
+        is where Vision found the plate.
+      required: [t, centre, radiusPx]
+      properties:
+        t:
+          type: number
+          description: Seconds on the `playback` video's timeline where this circle was measured.
+          minimum: 0
+        centre:
+          allOf:
+            - $ref: '#/components/schemas/PixelPoint'
+          description: The plate's centre.
+        radiusPx:
+          type: number
+          description: The plate's radius in pixels at `t`.
+          minimum: 0
+    Mark:
+      type: object
+      description: |
+        Where the end user marked the plate on one frame of the `playback`
+        video, in its pixels. Valid only inside the video, with `rim`
+        distinct from `centre` and at a plausible radius from it (too small
+        or too large for a plate is rejected).
+
+        A mark belongs to the job's data, not the end user's account: it is
+        deleted with the job (`DELETE /v1/jobs/{jobId}` or
+        `DELETE /v1/subjects/{subjectId}`) and used for training only while
+        the job's `trainingAllowed` is true.
+      required: [t, centre, rim]
+      properties:
+        t:
+          type: number
+          description: Seconds on the `playback` video's timeline where the mark was made.
+          minimum: 0
+        centre:
+          allOf:
+            - $ref: '#/components/schemas/PixelPoint'
+          description: The plate's centre.
+        rim:
+          allOf:
+            - $ref: '#/components/schemas/PixelPoint'
+          description: A point on the plate's outer rim, used with `centre` to size it.
+    ReanalysisRequest:
+      type: object
+      description: A request to analyse a job's video again from a marked plate.
+      additionalProperties: false
+      required: [mark]
+      properties:
+        mark:
+          $ref: '#/components/schemas/Mark'
     JobLabelRequest:
       description: The end user's opinion of a job's result.
       oneOf:
@@ -1245,6 +1563,13 @@ components:
             clientReference:
               type: string
               description: The job's `clientReference`, when it has one.
+            reanalysis:
+              type: boolean
+              description: |
+                True when this completion or failure followed
+                `POST /v1/jobs/{jobId}/reanalysis` rather than the job's
+                first analysis. Absent (equivalent to false) for a first
+                analysis.
     Problem:
       type: object
       description: An error, as RFC 9457 problem details.
@@ -1271,7 +1596,7 @@ components:
           description: Vision's id for the request, to quote when asking for support.
         errors:
           type: array
-          description: Per-field errors for a `400`.
+          description: Per-field errors for a `400` or `422`.
           items:
             type: object
             description: One invalid field.
@@ -1344,6 +1669,10 @@ components:
         createdAt: '2026-11-08T10:14:03Z'
         updatedAt: '2026-11-08T10:15:41Z'
         completedAt: '2026-11-08T10:15:41Z'
+        plateSource: detected
+        plateAccepted: true
+        plateCircle: { t: 0.5, centre: { px: 540, py: 900 }, radiusPx: 42 }
+        marksRemaining: 3
         video:
           durationS: 9.4
           frameRate: 30
@@ -1410,6 +1739,7 @@ components:
         createdAt: '2026-11-08T10:20:11Z'
         updatedAt: '2026-11-08T10:21:30Z'
         completedAt: '2026-11-08T10:21:30Z'
+        marksRemaining: 3
         video:
           durationS: 7.1
           frameRate: 30
@@ -1425,7 +1755,7 @@ components:
           bar_path:
             outcome: unanalysable
             reason: plates_not_found
-            detail: No red or blue bumper plate found in 96% of frames.
+            detail: No plate found in 96% of frames.
             modelVersion: 2026.11.0
           velocity:
             outcome: unanalysable
@@ -1446,6 +1776,202 @@ components:
               allRepsPassed: false
               reps:
                 - { rep: 1, passed: false, minKneeAngleDeg: 97 }
+    MarkedJob:
+      summary: Completed after the plate was marked by hand
+      description: |
+        The same job as `UnanalysableJob`, reanalysed once from a mark after
+        Vision found no plate by itself. `bar_path` and `velocity` are now
+        analysed, `plateSource` is `marked`, and `marksRemaining` has gone
+        from 3 to 2.
+      value:
+        id: job_01JC8ZB3N4M5K6J7H8G9F0E1DC
+        status: completed
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: true
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48214
+        createdAt: '2026-11-08T10:20:11Z'
+        updatedAt: '2026-11-15T09:05:12Z'
+        completedAt: '2026-11-15T09:05:12Z'
+        plateSource: marked
+        plateAccepted: true
+        plateCircle: { t: 2.1, centre: { px: 560, py: 1180 }, radiusPx: 60 }
+        marksRemaining: 2
+        video:
+          durationS: 7.1
+          frameRate: 30
+          width: 1080
+          height: 1920
+        playback:
+          url: https://storage.googleapis.com/vision-clips/job_01JC8ZB3N4M5K6J7H8G9F0E1DC.mp4?X-Goog-Signature=redacted
+          contentType: video/mp4
+          width: 1080
+          height: 1920
+          expiresAt: '2026-11-15T09:20:00Z'
+        results:
+          bar_path:
+            outcome: analysed
+            confidence: 0.86
+            modelVersion: 2026.11.0
+            samples:
+              - { t: 1.0, x: 0.0, y: 0.0, px: 560, py: 1180 }
+              - { t: 2.4, x: 0.01, y: -0.54, px: 572, py: 620 }
+              - { t: 3.6, x: 0.0, y: -0.01, px: 561, py: 1190 }
+          velocity:
+            outcome: analysed
+            confidence: 0.81
+            modelVersion: 2026.11.0
+            reps:
+              - { rep: 1, meanConcentricMps: 0.49, peakConcentricMps: 0.77 }
+          rep_count:
+            outcome: analysed
+            confidence: 0.93
+            modelVersion: 2026.11.0
+            count: 1
+            reps:
+              - { rep: 1, startS: 1.2, bottomS: 2.6, endS: 4.0 }
+          verification_checks:
+            squat_depth:
+              outcome: analysed
+              confidence: 0.79
+              modelVersion: 2026.11.0
+              allRepsPassed: false
+              reps:
+                - { rep: 1, passed: false, minKneeAngleDeg: 97 }
+    BarTrackMismatchJob:
+      summary: Completed, but the found plate isn't moving with the lifter
+      description: |
+        Vision found a circle it believes is a plate, but the reps it traces
+        disagree with the reps counted from the lifter's shoulders, so
+        `bar_path` and `velocity` are withheld rather than drawn from the
+        wrong thing. `plateCircle` is still returned, with `plateAccepted:
+        false`, so the result screen can show the end user the rejected
+        circle before they mark the real one.
+      value:
+        id: job_01JC9B4F6H8K0M2P4R6T8V0X2Z
+        status: completed
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: true
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48230
+        createdAt: '2026-11-15T08:40:00Z'
+        updatedAt: '2026-11-15T08:41:20Z'
+        completedAt: '2026-11-15T08:41:20Z'
+        plateSource: detected
+        plateAccepted: false
+        plateCircle: { t: 0.4, centre: { px: 300, py: 1500 }, radiusPx: 38 }
+        marksRemaining: 3
+        video:
+          durationS: 8.0
+          frameRate: 30
+          width: 1080
+          height: 1920
+        playback:
+          url: https://storage.googleapis.com/vision-clips/job_01JC9B4F6H8K0M2P4R6T8V0X2Z.mp4?X-Goog-Signature=redacted
+          contentType: video/mp4
+          width: 1080
+          height: 1920
+          expiresAt: '2026-11-15T08:56:00Z'
+        results:
+          bar_path:
+            outcome: unanalysable
+            reason: bar_track_mismatch
+            detail: The found circle's rep count (3) disagreed with the shoulders' (2).
+            modelVersion: 2026.11.0
+          velocity:
+            outcome: unanalysable
+            reason: bar_track_mismatch
+            modelVersion: 2026.11.0
+          rep_count:
+            outcome: analysed
+            confidence: 0.95
+            modelVersion: 2026.11.0
+            count: 2
+            reps:
+              - { rep: 1, startS: 0.8, bottomS: 2.0, endS: 3.3 }
+              - { rep: 2, startS: 3.6, bottomS: 4.9, endS: 6.2 }
+          verification_checks:
+            squat_depth:
+              outcome: analysed
+              confidence: 0.82
+              modelVersion: 2026.11.0
+              allRepsPassed: true
+              reps:
+                - { rep: 1, passed: true, minKneeAngleDeg: 70 }
+                - { rep: 2, passed: true, minKneeAngleDeg: 66 }
+    MarkedPlatesNotFoundJob:
+      summary: Completed after a mark, but the plate still couldn't be followed
+      description: |
+        A mark was sent, but Vision still couldn't follow a plate from it in
+        enough frames: `bar_path` and `velocity` come back `unanalysable`
+        with `plates_not_found`, same as before marking. `plateSource` is
+        still `marked` and `plateCircle` is still the mark as given, so the
+        result screen can show the end user exactly what they marked;
+        `plateAccepted` is false because that circle was not used for any
+        result. `rep_count` is unaffected, and `marksRemaining` is one lower
+        than before this attempt.
+      value:
+        id: job_01JC9D6H8K0M2P4R6T8V0X2B4D
+        status: completed
+        schemaVersion: '1.0'
+        lift: squat
+        features: [bar_path, velocity, rep_count, verification_checks]
+        subjectId: sub_7f3c9a12
+        trainingAllowed: true
+        equipment:
+          plateDiameterMm: 450
+        clientReference: set_48231
+        createdAt: '2026-11-15T08:50:00Z'
+        updatedAt: '2026-11-15T09:10:40Z'
+        completedAt: '2026-11-15T09:10:40Z'
+        plateSource: marked
+        plateAccepted: false
+        plateCircle: { t: 1.6, centre: { px: 480, py: 1300 }, radiusPx: 45 }
+        marksRemaining: 2
+        video:
+          durationS: 7.6
+          frameRate: 30
+          width: 1080
+          height: 1920
+        playback:
+          url: https://storage.googleapis.com/vision-clips/job_01JC9D6H8K0M2P4R6T8V0X2B4D.mp4?X-Goog-Signature=redacted
+          contentType: video/mp4
+          width: 1080
+          height: 1920
+          expiresAt: '2026-11-15T09:26:00Z'
+        results:
+          bar_path:
+            outcome: unanalysable
+            reason: plates_not_found
+            detail: The marked plate wasn't visible in enough frames to follow.
+            modelVersion: 2026.11.0
+          velocity:
+            outcome: unanalysable
+            reason: plates_not_found
+            modelVersion: 2026.11.0
+          rep_count:
+            outcome: analysed
+            confidence: 0.91
+            modelVersion: 2026.11.0
+            count: 1
+            reps:
+              - { rep: 1, startS: 1.0, bottomS: 2.4, endS: 3.8 }
+          verification_checks:
+            squat_depth:
+              outcome: analysed
+              confidence: 0.80
+              modelVersion: 2026.11.0
+              allRepsPassed: true
+              reps:
+                - { rep: 1, passed: true, minKneeAngleDeg: 71 }
     FailedJob:
       summary: Failed, the upload never arrived
       value:

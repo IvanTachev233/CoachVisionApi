@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CoachVision.Cli</RootNamespace>
+    <!-- An operator tool, not a server image: a native launcher is fine and expected here. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoachVision.Data\CoachVision.Data.csproj" />
+  </ItemGroup>
+
+</Project>

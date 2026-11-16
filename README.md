@@ -6,7 +6,7 @@ Video analysis for strength training: a client uploads a clip of a lift and gets
 | --- | --- |
 | `contracts/` | The public API (OpenAPI) and the worker's raw-output schema. See `contracts/README.md`. |
 | `worker/` | Python video worker: `vision_worker/` turns one clip into raw per-frame detections. `api.py` and `kinematics_engine.py` are the old proof of concept, which no longer runs (it needs MediaPipe's removed legacy API). |
-| `api/` | The API service: ASP.NET Core on .NET 10 (LTS). So far only `/health` and JSON logs. |
+| `api/` | The API service: ASP.NET Core on .NET 10 (LTS). `/health` and JSON logs, tenant isolation, and tenant API key authentication with per-tenant limits. |
 | `infra/` | Google Cloud for Vision, managed with OpenTofu, and the deploy script. See `infra/README.md`. |
 | `.github/` | CI and deploys (`workflows/ci.yml`), Dependabot. |
 
@@ -44,6 +44,132 @@ Restore also checks every package, direct and transitive, against nuget.org's ad
 
 Tests use xUnit v3 on Microsoft Testing Platform (`global.json` sets the runner).
 
+### Database
+
+`CoachVision.Data` (EF Core 10 + Npgsql) holds the schema: tenants, API keys, jobs, results and
+usage, with tenant isolation enforced by Postgres row-level security, not application code (ADR
+0027 in the notes repo). The API only registers the context when a connection string is
+configured under `ConnectionStrings:VisionDb`; with none set (for example staging before its
+database secret exists) the app still starts and `/health` still answers, since neither touches
+the database.
+
+Add a migration, from `api/`:
+
+```bash
+dotnet ef migrations add <Name> --project src/CoachVision.Data --startup-project src/CoachVision.Data
+```
+
+`dotnet ef` needs `VISIONDB_DESIGN_TIME_CONNECTION_STRING` set (any reachable Postgres; `migrations
+add` never opens it). The checks below also run the two database checks CI runs: every migration
+applied to an empty database, and the drift check (`dotnet ef migrations
+has-pending-model-changes`, exits non-zero on a model change with no matching migration). `dotnet
+test` already exercises both, against a disposable Postgres container
+(`CoachVision.Data.Tests`, Testcontainers; Docker must be running locally).
+
+### Tenant API keys
+
+There is no admin endpoint for this; `CoachVision.Cli` is the operator tool, run with the same
+connection string the API uses:
+
+```bash
+ConnectionStrings__VisionDb="<the API's own connection string>" dotnet run --project src/CoachVision.Cli -- create-tenant "Example Tenant"
+```
+
+```bash
+ConnectionStrings__VisionDb="<...>" dotnet run --project src/CoachVision.Cli -- issue-key <tenant-id> live
+```
+
+The key is printed once, by `issue-key`, and is not recoverable afterwards — store it immediately.
+A tenant keeps at most two active keys per kind (`live`/`test`); issue the second before revoking
+the first, to roll over without downtime:
+
+```bash
+ConnectionStrings__VisionDb="<...>" dotnet run --project src/CoachVision.Cli -- revoke-key <tenant-id> <api-key-id>
+```
+
+A request authenticates with `Authorization: Bearer <key>`. Which kind this deployment accepts is
+`Vision:AcceptedKeyKind` (`live` in production, `test` in staging), defaulting to `live`. Each
+tenant's rate, concurrent-jobs, daily-minutes and clip-size/length limits are its own
+`tenant_limits` row, created with sensible defaults when the tenant is; there is no tool yet to
+change them beyond a direct update through the migrator connection.
+
+### Rep and velocity engine
+
+`CoachVision.Analysis` (`api/src/CoachVision.Analysis`) turns one worker raw output
+(`contracts/internal/raw-output/v1.json`) into the public results
+(`contracts/openapi/vision-v1.yaml`: `Results`): rep count, bar velocity, bar path and the squat
+depth check. It has no database or web dependency and is not yet called from `CoachVision.Api`.
+
+Reps are counted twice, independently: from the shoulders (works even without a visible plate)
+and from the bar. If the two counts disagree, the bar is not used for anything on that clip
+(`velocity` and `bar_path` come back `unanalysable: bar_track_mismatch`) rather than risk a wrong
+circle passing in silence. `rep_count` still comes back from the shoulders either way. If any
+single rep's own concentric window does not have enough of the bar — fewer than two frames, or
+present across less than half the window's own span — `velocity` as a whole comes back
+`unanalysable: plates_not_found` too: there is no made-up speed for one rep inside an otherwise
+analysed result.
+
+Its tests (`api/tests/CoachVision.Analysis.Tests`) are of two kinds:
+
+- Unit tests of each building block, and synthetic clips built in code (clean reps, a paused
+  rep, a walkout dip, no plate, a bar that never moves, a non-squat lift, a known bar speed).
+  These run in CI.
+- Tests against recorded clips' raw outputs, skipped unless told where they are (the same
+  convention as the worker's own clip tests):
+
+  ```bash
+  VISION_EVAL_OUTPUTS=/path/to/raw-outputs VISION_EVAL_LABELS=/path/to/clip-labels.csv dotnet test --project tests/CoachVision.Analysis.Tests
+  ```
+
+  `VISION_EVAL_OUTPUTS` is a folder of `<clip>.json` raw outputs; `VISION_EVAL_LABELS` is the
+  clip labels CSV (`file,reps,plate_colour,plate_diameter_mm,...`). CI never sets these, so it
+  runs the synthetic-track tests only.
+
+**Where a rep ends, for velocity.** A rep's concentric phase is bottom to lockout; lockout is not
+"back at the level the bar started from" (a lifter may finish noticeably lower, or a little
+higher, than where the rep began) and not "no further rise for a while" either (that also means
+something different at 30 fps than at 60, and would end the rep on a slow settling creep after
+the real top, not just on a stall). It is two steps, over the bar's raw track lightly smoothed in
+time (not frames, so the same physical window covers more samples at a higher frame rate, not
+fewer frames at any rate): (a) a gate — the first point at which the bar has recovered at least
+85% of this rep's own descent depth — marks where judging the climb to the top may start, low
+enough that a stall before it is never mistaken for the top; (b) from there, the engine walks
+forward to the actual top of the rise: the first point after which the bar gets no higher, within
+0.3 s, by more than 1% of the depth. Checked against every analysed rep in both recorded runs
+(102 reps): moving the gate from 0.85 to 0.95 changes no rep's mean by more than 3%, so the gate
+only has to clear a stall — the climb step decides the answer, not the gate's own value. A rep's
+lockout search never reaches past the shoulders' own end time for that rep plus a one-second
+margin, so it can't run on into a walk-back or re-rack afterwards (where the bar often ends up
+higher than where the rep itself started).
+
+Its tests include: a plateau that never returns to 100% of the start level (`squat_10`'s shape);
+a dip followed by a slow creep past the real top (`squat_07`'s shape); a rep that tops out below
+the gate (ends there, not at a fallback); a stall at 60% of depth for 0.6 s (does not end the
+rep); a rep still visibly rising when it crosses the gate, finishing its climb 0.15 s later (ends
+at the top, not the crossing); a re-rack after the last rep, an unrack before the first, a pause
+at the bottom, 30 vs. 60 fps, and twice the pixel scale (all give the same result).
+
+**What is validated against real clips.** Rep count from the shoulders, checked against the
+labelled rep count on every clip a worker run provides; the two lockout constants above, checked
+for stability (not tuned to a target) across every analysed rep in two recorded runs (see
+`RecordedOutputsTests` for the per-rep table this is based on). **What is not validated.** There
+is no ground-truth bar speed for any recorded clip, so the absolute accuracy of `meanConcentricMps`
+and `peakConcentricMps` — only their internal consistency — is unverified. The hip and knee
+positions the squat depth check reads have never been checked against labelled body points, so
+`squat_depth`'s `passed` and `minKneeAngleDeg` are implemented to the contract but not yet
+trusted; nor is the choice of one plate-radius scale per rep for velocity (chosen because the
+plate's measured radius can vary within a clip, and scaling frame by frame would turn that
+jitter into fake speed changes) checked against a ground-truth speed. Every threshold the engine
+invents (the lockout gate and climb tolerance above, the bar-presence rule a rep's own concentric
+window must clear before it can be measured at all, the peak-speed bound above which `velocity`
+is withheld rather than reported capped, the definition of confidence itself, the scheme behind
+`modelVersion`) is marked as an assumption in its own doc comments, for confirmation before this
+engine is relied on. `confidence` is computed and returned on every analysed result, but nothing
+is withheld on it: the one case that withholds a result on plausibility is a rep's peak speed
+above that bound, which comes back `unanalysable: low_confidence` ("a result was produced but
+isn't trusted, so it is withheld") instead of a silently capped number; there is no other
+confidence cutoff yet.
+
 ## Images
 
 Each service has a multi-stage `Dockerfile` with base images pinned by digest, running as an unprivileged user on port 8080. From the repository root:
@@ -70,7 +196,7 @@ GitHub variables: `BUILD_WIF_PROVIDER` and `BUILD_SA` in the repository (the `gi
 
 ## Analysis time on 2 vCPU
 
-`vision_worker.bench` runs the worker on every clip in a folder, with the Full model and the default plate finder, and prints a table of analysis time against the bar of twice the clip's length (VS3). Clips first go through `vision_eval.strip`, on the machine that holds them: a copy with only the picture, no sound, location or other tags. From `worker/`:
+`vision_worker.bench` runs the worker on every clip in a folder, with the Full model and the default plate finder, and prints a table of analysis time against the bar of 4.5 times the clip's length. The bar was twice the length until the first run on Cloud Run with 2 vCPU (2026-11-15): 1 of the 20 evaluation clips was within it, the median was 2.95 times and the slowest 4.17 times, the 1080p clips between 1.98 and 3.33. Analysis runs in the background, so the bar was relaxed to one every clip meets. Clips first go through `vision_eval.strip`, on the machine that holds them: a copy with only the picture, no sound, location or other tags. From `worker/`:
 
 ```bash
 .venv/bin/python -m vision_eval.strip /path/to/clips /path/to/stripped
