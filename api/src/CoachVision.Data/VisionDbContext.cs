@@ -26,6 +26,8 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
 
     public DbSet<TenantLimits> TenantLimits => Set<TenantLimits>();
 
+    public DbSet<JobLabel> Labels => Set<JobLabel>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Tenant>(tenant =>
@@ -35,6 +37,7 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
             tenant.Property(t => t.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
             tenant.Property(t => t.Name).HasColumnName("name").IsRequired();
             tenant.Property(t => t.CreatedAtUtc).HasColumnName("created_at").HasColumnType("timestamptz").IsRequired();
+            tenant.Property(t => t.TrainingAllowed).HasColumnName("training_allowed").HasDefaultValue(false).IsRequired();
         });
 
         modelBuilder.Entity<ApiKey>(apiKey =>
@@ -135,6 +138,13 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
             usage.Property(u => u.OccurredAtUtc).HasColumnName("occurred_at").HasColumnType("timestamptz").IsRequired();
             // The seam future metering needs: usage per tenant per day.
             usage.HasIndex(u => new { u.TenantId, u.OccurredAtUtc });
+            // Ivan's rule: at most one usage row per (tenant, job, feature), and it stays as
+            // written once inserted (MeteringService.RecordUsageAsync writes it as INSERT ... ON
+            // CONFLICT DO NOTHING against this exact index). A plain unique btree index already
+            // treats every NULL job_id as distinct from every other, so a deleted job's usage
+            // (job_id set to null) is never deduplicated against another job's rows — no partial
+            // index is needed for that.
+            usage.HasIndex(u => new { u.TenantId, u.JobId, u.Feature }).IsUnique();
             usage.HasOne<Tenant>().WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
             // Nullable: a usage record outlives its job (the contract keeps usage after a job is
             // deleted), so the foreign key is enforced only while JobId is set (Postgres MATCH
@@ -146,6 +156,31 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
                 .HasPrincipalKey(j => new { j.TenantId, j.Id })
                 .OnDelete(DeleteBehavior.SetNull)
                 .IsRequired(false);
+        });
+
+        modelBuilder.Entity<JobLabel>(label =>
+        {
+            label.ToTable("job_labels");
+            label.HasKey(l => l.Id);
+            label.Property(l => l.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+            label.Property(l => l.TenantId).HasColumnName("tenant_id").IsRequired();
+            label.Property(l => l.JobId).HasColumnName("job_id").IsRequired();
+            label.Property(l => l.Assessment).HasColumnName("assessment").IsRequired();
+            label.Property(l => l.Reason).HasColumnName("reason");
+            label.Property(l => l.UpdatedAtUtc).HasColumnName("updated_at").HasColumnType("timestamptz").IsRequired();
+            label.ToTable(t => t.HasCheckConstraint("CK_job_labels_assessment", "assessment IN ('correct', 'incorrect')"));
+            label.ToTable(t => t.HasCheckConstraint(
+                "CK_job_labels_reason",
+                "reason IS NULL OR (assessment = 'incorrect' AND reason IN ('wrong_rep_count', 'bar_path_off', 'wrong_lift'))"));
+            // A job has at most one label: this is what the endpoint's "replace, never a second
+            // row" relies on (LabelsRepository.UpsertAsync finds by this pair before inserting).
+            label.HasIndex(l => new { l.TenantId, l.JobId }).IsUnique();
+            label
+                .HasOne<Job>()
+                .WithMany()
+                .HasForeignKey(l => new { l.TenantId, l.JobId })
+                .HasPrincipalKey(j => new { j.TenantId, j.Id })
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

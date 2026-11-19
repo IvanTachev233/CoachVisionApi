@@ -38,8 +38,8 @@ variable "test_members" {
   # Named people only: never allUsers, allAuthenticatedUsers, a domain or a
   # group, each of which could let in more than the one person meant.
   validation {
-    condition     = alltrue([for member in var.test_members : can(regex("^user:[^@\\s,:]+@[^@\\s,:]+$", member))])
-    error_message = "Each test member must be user:<address>; groups, domains, service accounts and allUsers are refused."
+    condition     = alltrue([for member in var.test_members : can(regex("^user:[^@\\s,:<>\"']+@[^@\\s,:<>\"']+$", member))])
+    error_message = "Each test member must be exactly user:name@domain: lower-case \"user:\", no space after the colon, no quotes or brackets, several separated by commas or new lines. Groups, domains, service accounts and allUsers are refused."
   }
 }
 

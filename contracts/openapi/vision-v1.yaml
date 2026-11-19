@@ -301,7 +301,10 @@ paths:
         counts down from 3 so a client can hide the control once it reaches
         0. A marked analysis is not billed again: billing is per video, once
         per feature that ends `analysed`, no matter how many times it is
-        analysed.
+        analysed. The usage record written after a feature's first analysis
+        stays exactly as it is from then on: a marked analysis never adds a
+        new record and never removes the existing one, whichever way that
+        feature's result changes on the marked run.
 
         A mark can't help a job that requested neither `bar_path` nor
         `velocity`, or whose `lift` isn't analysed (only `squat` is, in v1):

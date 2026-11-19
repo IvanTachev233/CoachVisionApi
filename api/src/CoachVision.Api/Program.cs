@@ -1,3 +1,4 @@
+using CoachVision.Api.Endpoints;
 using CoachVision.Api.Logging;
 using CoachVision.Api.Security;
 using CoachVision.Data;
@@ -83,6 +84,8 @@ app.UseRateLimiter();
 app.UseAuthorization();
 
 var v1 = app.MapGroup("/v1").RequireAuthorization();
+
+LabelsEndpoint.Map(v1);
 
 // An optional, generic hook: a test host registers an Action<IEndpointRouteBuilder> singleton to
 // map its own routes onto this group; nothing here depends on, or even names, what those routes

@@ -19,7 +19,7 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var limit = await GetLimitsAsync(db, tenant.Id, ct);
 
         var atLimit = await CheckScopedAsync(db, tenant.Id, limit.MaxClipSizeBytes, ct);
@@ -35,7 +35,7 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var limit = await GetLimitsAsync(db, tenant.Id, ct);
 
         await using (var tx = await db.BeginTenantScopeAsync(tenant.Id, ct))
@@ -68,7 +68,7 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var limit = await GetLimitsAsync(db, tenant.Id, ct);
         var limitSeconds = limit.DailyMinutesLimit * 60m;
 
@@ -97,7 +97,7 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var limit = await GetLimitsAsync(db, tenant.Id, ct);
         var limitSeconds = limit.DailyMinutesLimit * 60m;
 
@@ -123,8 +123,8 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenantA = await ApiKeyService.ProvisionTenantAsync(db, "tenant-a-" + Guid.NewGuid(), ct);
-        var tenantB = await ApiKeyService.ProvisionTenantAsync(db, "tenant-b-" + Guid.NewGuid(), ct);
+        var tenantA = await ApiKeyService.ProvisionTenantAsync(db, "tenant-a-" + Guid.NewGuid(), cancellationToken: ct);
+        var tenantB = await ApiKeyService.ProvisionTenantAsync(db, "tenant-b-" + Guid.NewGuid(), cancellationToken: ct);
         var limitA = await GetLimitsAsync(db, tenantA.Id, ct);
 
         await using (var tx = await db.BeginTenantScopeAsync(tenantA.Id, ct))
@@ -152,7 +152,7 @@ public sealed class JobAdmissionTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var limit = await GetLimitsAsync(db, tenant.Id, ct);
 
         await using (var tx = await db.BeginTenantScopeAsync(tenant.Id, ct))

@@ -209,7 +209,7 @@ module "monitoring" {
 # empty it again afterwards. Its own name and its own secret in CI, so that a
 # value set for staging (TF_VAR_media_test_members) is never read here.
 variable "media_test_members_production" {
-  description = "Comma-separated people, each as user:<address>, given read and write on the three media buckets for testing. Nothing else is accepted. Kept out of the repo; set TF_VAR_media_test_members_production (CI: the repository secret MEDIA_TEST_MEMBERS_PRODUCTION). Empty: nobody."
+  description = "People, each as user:<address>, separated by commas or new lines, given read and write on the three media buckets for testing. Nothing else is accepted. Kept out of the repo; set TF_VAR_media_test_members_production (CI: the repository secret MEDIA_TEST_MEMBERS_PRODUCTION). Empty: nobody."
   type        = string
   default     = ""
   sensitive   = true
@@ -225,7 +225,7 @@ module "pipeline" {
   worker_runtime_sa_email = module.worker.runtime_sa_email
   channel_display_name    = "Vision production"
   environment             = "production"
-  test_members            = compact([for member in split(",", var.media_test_members_production) : trimspace(member)])
+  test_members            = compact([for member in split(",", replace(var.media_test_members_production, "\n", ",")) : trimspace(member)])
   # assumption: Ivan to confirm
   bucket_growth_alert_bytes = 50 * 1024 * 1024 * 1024 # 50 GiB
 

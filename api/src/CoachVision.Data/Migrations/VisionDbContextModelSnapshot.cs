@@ -140,6 +140,49 @@ namespace CoachVision.Data.Migrations
                     b.ToTable("jobs", (string)null);
                 });
 
+            modelBuilder.Entity("CoachVision.Data.Entities.JobLabel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Assessment")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("assessment");
+
+                    b.Property<string>("JobId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("job_id");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "JobId")
+                        .IsUnique();
+
+                    b.ToTable("job_labels", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_job_labels_assessment", "assessment IN ('correct', 'incorrect')");
+
+                            t.HasCheckConstraint("CK_job_labels_reason", "reason IS NULL OR (assessment = 'incorrect' AND reason IN ('wrong_rep_count', 'bar_path_off', 'wrong_lift'))");
+                        });
+                });
+
             modelBuilder.Entity("CoachVision.Data.Entities.JobResult", b =>
                 {
                     b.Property<Guid>("Id")
@@ -195,6 +238,12 @@ namespace CoachVision.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("name");
+
+                    b.Property<bool>("TrainingAllowed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("training_allowed");
 
                     b.HasKey("Id");
 
@@ -268,9 +317,10 @@ namespace CoachVision.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "JobId");
-
                     b.HasIndex("TenantId", "OccurredAtUtc");
+
+                    b.HasIndex("TenantId", "JobId", "Feature")
+                        .IsUnique();
 
                     b.ToTable("usage", null, t =>
                         {
@@ -293,6 +343,16 @@ namespace CoachVision.Data.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CoachVision.Data.Entities.JobLabel", b =>
+                {
+                    b.HasOne("CoachVision.Data.Entities.Job", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "JobId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 

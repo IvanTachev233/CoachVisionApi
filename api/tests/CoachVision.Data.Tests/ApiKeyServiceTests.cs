@@ -21,7 +21,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
 
         var (apiKey, plaintext) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
 
@@ -39,7 +39,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
 
         var (first, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
         var (second, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
@@ -58,7 +58,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
 
         await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
         await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
@@ -73,7 +73,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
 
         var (first, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
         await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
@@ -99,7 +99,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
 
         await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
         await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
@@ -120,7 +120,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var (apiKey, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
 
         await using var transaction = await db.BeginTenantScopeAsync(tenant.Id, ct);
@@ -137,7 +137,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var (apiKey, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.TestKind, ct);
 
         await using var transaction = await db.BeginTenantScopeAsync(tenant.Id, ct);
@@ -151,7 +151,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(db, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         var (apiKey, _) = await ApiKeyService.IssueAsync(db, tenant.Id, ApiKeySecrets.LiveKind, ct);
 
         await using var transaction = await db.BeginTenantScopeAsync(tenant.Id, ct);
@@ -165,8 +165,8 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenantA = await ApiKeyService.ProvisionTenantAsync(db, "tenant-a-" + Guid.NewGuid(), ct);
-        var tenantB = await ApiKeyService.ProvisionTenantAsync(db, "tenant-b-" + Guid.NewGuid(), ct);
+        var tenantA = await ApiKeyService.ProvisionTenantAsync(db, "tenant-a-" + Guid.NewGuid(), cancellationToken: ct);
+        var tenantB = await ApiKeyService.ProvisionTenantAsync(db, "tenant-b-" + Guid.NewGuid(), cancellationToken: ct);
         var (apiKey, _) = await ApiKeyService.IssueAsync(db, tenantA.Id, ApiKeySecrets.LiveKind, ct);
 
         await using var transaction = await db.BeginTenantScopeAsync(tenantA.Id, ct);
@@ -180,7 +180,7 @@ public sealed class ApiKeyServiceTests(VisionPostgresFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         using var seedDb = VisionPostgresFixture.CreateContext(fixture.RuntimeConnectionString);
-        var tenant = await ApiKeyService.ProvisionTenantAsync(seedDb, "tenant-" + Guid.NewGuid(), ct);
+        var tenant = await ApiKeyService.ProvisionTenantAsync(seedDb, "tenant-" + Guid.NewGuid(), cancellationToken: ct);
         await ApiKeyService.IssueAsync(seedDb, tenant.Id, ApiKeySecrets.LiveKind, ct);
 
         // One active key already exists; two concurrent issues now race for the second slot. The

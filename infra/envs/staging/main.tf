@@ -125,7 +125,7 @@ module "monitoring" {
 # removed by the next apply; a tester is named here instead. Production has
 # its own list, fed from a separate secret.
 variable "media_test_members" {
-  description = "Comma-separated people, each as user:<address>, given read and write on the three media buckets for testing. Nothing else is accepted. Kept out of the repo; set TF_VAR_media_test_members (CI: the repository secret MEDIA_TEST_MEMBERS). Empty: nobody."
+  description = "People, each as user:<address>, separated by commas or new lines, given read and write on the three media buckets for testing. Nothing else is accepted. Kept out of the repo; set TF_VAR_media_test_members (CI: the repository secret MEDIA_TEST_MEMBERS). Empty: nobody."
   type        = string
   default     = ""
   sensitive   = true
@@ -141,7 +141,7 @@ module "pipeline" {
   worker_runtime_sa_email = module.worker.runtime_sa_email
   channel_display_name    = "Vision staging"
   environment             = "staging"
-  test_members            = compact([for member in split(",", var.media_test_members) : trimspace(member)])
+  test_members            = compact([for member in split(",", replace(var.media_test_members, "\n", ",")) : trimspace(member)])
   # assumption: Ivan to confirm
   bucket_growth_alert_bytes = 5 * 1024 * 1024 * 1024 # 5 GiB
 
