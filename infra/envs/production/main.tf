@@ -22,6 +22,7 @@ locals {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "monitoring.googleapis.com",
+    "pubsub.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "serviceusage.googleapis.com",
@@ -61,6 +62,10 @@ module "api" {
 }
 
 # Private worker: only identities granted run.invoker elsewhere can call it.
+# max_instances becomes the Cloud Run scaling limit via module `service`'s
+# `scaling { max_instance_count = var.max_instances }` (infra-modules-v2
+# infra/modules/service/main.tf): the cap row V3a asks for is already in
+# place here, capped lower than the API's.
 module "worker" {
   source = "${local.modules}/service${local.ref}"
 
@@ -193,4 +198,38 @@ module "monitoring" {
     alert_display_name = "Vision production API uptime failure"
     notify             = true
   }
+}
+
+# --- Media storage and the upload job queue (V3a) ---------------------------
+
+# Who may read and write the media buckets for testing, besides the worker.
+# The buckets' policy is authoritative (ADR 0030), so access given by hand is
+# removed by the next apply; a tester is named here instead. These buckets
+# hold real users' videos: keep the list empty unless a test needs it, and
+# empty it again afterwards. Its own name and its own secret in CI, so that a
+# value set for staging (TF_VAR_media_test_members) is never read here.
+variable "media_test_members_production" {
+  description = "People, each as user:<address>, separated by commas or new lines, given read and write on the three media buckets for testing. Nothing else is accepted. Kept out of the repo; set TF_VAR_media_test_members_production (CI: the repository secret MEDIA_TEST_MEMBERS_PRODUCTION). Empty: nobody."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+module "pipeline" {
+  source = "../../modules/pipeline"
+
+  project_id              = local.project_id
+  region                  = local.region
+  worker_uri              = module.worker.uri
+  worker_service_name     = "vision-worker"
+  worker_runtime_sa_email = module.worker.runtime_sa_email
+  channel_display_name    = "Vision production"
+  environment             = "production"
+  test_members            = compact([for member in split(",", replace(var.media_test_members_production, "\n", ",")) : trimspace(member)])
+  # assumption: Ivan to confirm
+  bucket_growth_alert_bytes = 50 * 1024 * 1024 * 1024 # 50 GiB
+
+  # module.worker: module `service` at infra-modules-v2 has no name output,
+  # so nothing else orders the worker's existence before the invoker grant.
+  depends_on = [google_project_service.this, module.monitoring, module.worker]
 }

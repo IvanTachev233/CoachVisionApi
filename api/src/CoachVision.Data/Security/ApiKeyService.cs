@@ -21,9 +21,13 @@ public static class ApiKeyService
     /// <c>WITH CHECK (id = app_current_tenant_id())</c> needs the id before the insert, to set the
     /// transaction-local tenant to it.
     /// </summary>
-    public static async Task<Tenant> ProvisionTenantAsync(VisionDbContext db, string name, CancellationToken cancellationToken = default)
+    public static async Task<Tenant> ProvisionTenantAsync(
+        VisionDbContext db,
+        string name,
+        bool trainingAllowed = false,
+        CancellationToken cancellationToken = default)
     {
-        var tenant = new Tenant { Id = Guid.NewGuid(), Name = name, CreatedAtUtc = DateTime.UtcNow };
+        var tenant = new Tenant { Id = Guid.NewGuid(), Name = name, CreatedAtUtc = DateTime.UtcNow, TrainingAllowed = trainingAllowed };
 
         await using var transaction = await db.BeginTenantScopeAsync(tenant.Id, cancellationToken);
         db.Tenants.Add(tenant);
@@ -32,6 +36,19 @@ public static class ApiKeyService
         await transaction.CommitAsync(cancellationToken);
 
         return tenant;
+    }
+
+    /// <summary>
+    /// Sets a tenant's own training flag (<c>Tenant.TrainingAllowed</c>), off by default for
+    /// every tenant. The run-time role has UPDATE on <c>tenants</c> (the
+    /// <c>AddTenantIsolation</c> migration's grant), so this runs under the tenant's own scope
+    /// the same way <see cref="RevokeAsync"/> does, rather than needing the migrator role.
+    /// </summary>
+    public static async Task SetTenantTrainingAsync(VisionDbContext db, Guid tenantId, bool trainingAllowed, CancellationToken cancellationToken = default)
+    {
+        var tenant = await db.Tenants.SingleAsync(t => t.Id == tenantId, cancellationToken);
+        tenant.TrainingAllowed = trainingAllowed;
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>

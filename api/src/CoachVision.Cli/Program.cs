@@ -40,6 +40,20 @@ public static class Cli
                     Console.WriteLine($"tenant_id={tenant.Id}");
                     return 0;
 
+                case "create-tenant" when args.Length == 3 && args[2] == "--training-allowed":
+                    var trainingTenant = await ApiKeyService.ProvisionTenantAsync(db, args[1], trainingAllowed: true);
+                    Console.WriteLine($"tenant_id={trainingTenant.Id}");
+                    return 0;
+
+                case "set-tenant-training" when args.Length == 3 && Guid.TryParse(args[1], out var trainingTenantId) && IsValidBool(args[2]):
+                    await using (var transaction = await db.BeginTenantScopeAsync(trainingTenantId))
+                    {
+                        await ApiKeyService.SetTenantTrainingAsync(db, trainingTenantId, bool.Parse(args[2]));
+                        await transaction.CommitAsync();
+                    }
+                    Console.WriteLine($"tenant_id={args[1]} training_allowed={args[2]}");
+                    return 0;
+
                 case "issue-key" when args.Length == 3 && Guid.TryParse(args[1], out var issueTenantId) && IsValidKind(args[2]):
                     var (apiKey, plaintext) = await ApiKeyService.IssueAsync(db, issueTenantId, args[2]);
                     Console.WriteLine("The key below is shown once and is not recoverable afterwards. Store it now.");
@@ -90,13 +104,20 @@ public static class Cli
 
     private static bool IsValidKind(string kind) => kind is ApiKeySecrets.LiveKind or ApiKeySecrets.TestKind;
 
+    private static bool IsValidBool(string value) => value is "true" or "false";
+
     private static void PrintUsage()
     {
         Console.Error.WriteLine("""
             Usage:
-              create-tenant <name>
+              create-tenant <name> [--training-allowed]
+              set-tenant-training <tenant-id> <true|false>
               issue-key <tenant-id> <live|test>
               revoke-key <tenant-id> <api-key-id>
+
+            A tenant's training flag defaults to false (every tenant, including
+            external ones, starts off); set-tenant-training is the only way to turn
+            it on later.
 
             Reads the connection string from ConnectionStrings__VisionDb (the same one
             the API uses).

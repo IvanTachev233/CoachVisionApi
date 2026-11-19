@@ -18,6 +18,7 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
     [InlineData("jobs")]
     [InlineData("results")]
     [InlineData("usage")]
+    [InlineData("job_labels")]
     public async Task Tenant_A_cannot_read_update_delete_or_insert_into_tenant_Bs_rows(string table)
     {
         await using var migrator = await fixture.OpenMigratorConnectionAsync();
@@ -75,12 +76,13 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
         await InsertApiKeyAsync(migrator, tenantA);
         await InsertResultAsync(migrator, tenantA, jobA);
         await InsertUsageAsync(migrator, tenantA, jobA);
+        await InsertJobLabelAsync(migrator, tenantA, jobA);
 
         await using var runtime = await fixture.OpenRuntimeConnectionAsync();
         await using var tx = await runtime.BeginTransactionAsync(TestContext.Current.CancellationToken);
         // Deliberately not calling SetTenantAsync.
 
-        foreach (var table in new[] { "tenants", "api_keys", "jobs", "results", "usage", "tenant_limits" })
+        foreach (var table in new[] { "tenants", "api_keys", "jobs", "results", "usage", "tenant_limits", "job_labels" })
         {
             await using var command = runtime.CreateCommand();
             command.CommandText = $"SELECT count(*) FROM {table}";
@@ -186,6 +188,7 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
             "api_keys" => (NpgsqlDbType.Uuid, await InsertApiKeyAsync(migrator, tenantA), await InsertApiKeyAsync(migrator, tenantB)),
             "results" => (NpgsqlDbType.Uuid, await InsertResultAsync(migrator, tenantA, jobA), await InsertResultAsync(migrator, tenantB, jobB)),
             "usage" => (NpgsqlDbType.Uuid, await InsertUsageAsync(migrator, tenantA, jobA), await InsertUsageAsync(migrator, tenantB, jobB)),
+            "job_labels" => (NpgsqlDbType.Uuid, await InsertJobLabelAsync(migrator, tenantA, jobA), await InsertJobLabelAsync(migrator, tenantB, jobB)),
             _ => throw new ArgumentOutOfRangeException(nameof(table), table, "unknown table"),
         };
     }
@@ -196,6 +199,7 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
         "api_keys" => "UPDATE api_keys SET kind = 'live' WHERE id = $1",
         "results" => "UPDATE results SET feature = 'velocity' WHERE id = $1",
         "usage" => "UPDATE usage SET feature = 'velocity' WHERE id = $1",
+        "job_labels" => "UPDATE job_labels SET assessment = 'incorrect', reason = 'wrong_lift' WHERE id = $1",
         _ => throw new ArgumentOutOfRangeException(nameof(table), table, "unknown table"),
     };
 
@@ -227,6 +231,13 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
                 break;
             case "usage":
                 command.CommandText = "INSERT INTO usage (tenant_id, job_id, feature, video_seconds, occurred_at) VALUES ($1, $2, 'bar_path', 9.4, now())";
+                command.Parameters.Add(new NpgsqlParameter { Value = otherTenant, NpgsqlDbType = NpgsqlDbType.Uuid });
+                command.Parameters.Add(new NpgsqlParameter { Value = otherTenantsJob, NpgsqlDbType = NpgsqlDbType.Text });
+                break;
+            case "job_labels":
+                // job_id names otherTenant's own job, so only row security (not the composite
+                // foreign key) is what refuses this from a tenant-A session.
+                command.CommandText = "INSERT INTO job_labels (tenant_id, job_id, assessment, updated_at) VALUES ($1, $2, 'correct', now())";
                 command.Parameters.Add(new NpgsqlParameter { Value = otherTenant, NpgsqlDbType = NpgsqlDbType.Uuid });
                 command.Parameters.Add(new NpgsqlParameter { Value = otherTenantsJob, NpgsqlDbType = NpgsqlDbType.Text });
                 break;
@@ -326,6 +337,15 @@ public sealed class AllTablesTenantIsolationTests(VisionPostgresFixture fixture)
     {
         await using var command = migrator.CreateCommand();
         command.CommandText = "INSERT INTO usage (tenant_id, job_id, feature, video_seconds, occurred_at) VALUES ($1, $2, 'bar_path', 9.4, now()) RETURNING id";
+        command.Parameters.Add(new NpgsqlParameter { Value = tenantId, NpgsqlDbType = NpgsqlDbType.Uuid });
+        command.Parameters.Add(new NpgsqlParameter { Value = jobId, NpgsqlDbType = NpgsqlDbType.Text });
+        return (Guid)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
+    }
+
+    private static async Task<Guid> InsertJobLabelAsync(NpgsqlConnection migrator, Guid tenantId, string jobId)
+    {
+        await using var command = migrator.CreateCommand();
+        command.CommandText = "INSERT INTO job_labels (tenant_id, job_id, assessment, updated_at) VALUES ($1, $2, 'correct', now()) RETURNING id";
         command.Parameters.Add(new NpgsqlParameter { Value = tenantId, NpgsqlDbType = NpgsqlDbType.Uuid });
         command.Parameters.Add(new NpgsqlParameter { Value = jobId, NpgsqlDbType = NpgsqlDbType.Text });
         return (Guid)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;

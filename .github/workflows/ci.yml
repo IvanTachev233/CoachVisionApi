@@ -17,6 +17,7 @@ permissions:
 env:
   # One registry, in production, for both projects (infra/envs/production); deploys are by digest.
   REGISTRY: europe-west1-docker.pkg.dev/coachvision-prod/vision
+  TOFU_VERSION: 1.13.9 # same as required_version in infra/envs/
 
 jobs:
   # Path filtering happens here, not under `on:`: a workflow skipped by `paths` leaves its checks
@@ -28,6 +29,7 @@ jobs:
       api: ${{ steps.diff.outputs.api }}
       worker: ${{ steps.diff.outputs.worker }}
       deploy: ${{ steps.diff.outputs.deploy }}
+      infra: ${{ steps.diff.outputs.infra }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,18 +47,20 @@ jobs:
             *) base='' head='' ;;
           esac
           # Manual runs, new branches and unknown bases test (and deploy) everything.
-          api=true worker=true
+          api=true worker=true infra=true
           if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
             changed=$(git diff --name-only "$base...$head")
             grep -qE '^(api/|infra/deploy\.sh$|infra/ci/|\.github/workflows/ci\.yml$)' <<<"$changed" || api=false
             # The worker's tests read the raw-output schema in contracts/.
             grep -qE '^(worker/|contracts/|infra/deploy\.sh$|infra/ci/|\.github/workflows/ci\.yml$)' <<<"$changed" || worker=false
+            grep -qE '^(infra/|\.github/workflows/ci\.yml$)' <<<"$changed" || infra=false
           fi
           deploy=false
           if [ "$api" = true ] || [ "$worker" = true ]; then deploy=true; fi
           echo "api=$api" | tee -a "$GITHUB_OUTPUT"
           echo "worker=$worker" | tee -a "$GITHUB_OUTPUT"
           echo "deploy=$deploy" | tee -a "$GITHUB_OUTPUT"
+          echo "infra=$infra" | tee -a "$GITHUB_OUTPUT"
 
   test-api:
     needs: changes
@@ -319,10 +323,159 @@ jobs:
       - name: Smoke check
         run: infra/ci/smoke-deployed.sh "$GCP_PROJECT_ID"
 
+  # OpenTofu. Read-only: on a PR it reports what would change, on main it saves the plans the two
+  # apply jobs run. This repo is public, so only addresses and actions are published; see
+  # infra/ci/. After deploy-staging, so that staging's plan sees the revision this merge deployed
+  # (otherwise a merge that both deploys and changes infra/ would make tofu-apply-staging refuse
+  # its own plan as stale). Forks and Dependabot get no OIDC token, so their runs skip it.
+  tofu-plan:
+    needs: [changes, deploy-staging]
+    if: >-
+      !cancelled() && needs.changes.outputs.infra == 'true' && (
+        (github.event_name == 'pull_request' && github.base_ref == 'main' &&
+         github.event.pull_request.head.repo.full_name == github.repository &&
+         github.actor != 'dependabot[bot]') ||
+        (github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+      pull-requests: write # the summary comment
+    outputs:
+      staging: ${{ steps.staging.outputs.object }} # empty: nothing to apply
+      production: ${{ steps.production.outputs.object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false # the wrapper would log tofu's output and expose it as step outputs
+      - run: tofu fmt -check -recursive infra
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.TOFU_PLAN_WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.TOFU_PLAN_SA_STAGING }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - id: staging
+        name: Plan staging
+        env:
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+          # Optional: who may read and write staging's media buckets for testing. An unset
+          # secret is an empty string, which means nobody. The apply jobs don't need it: a saved
+          # plan carries its variables.
+          TF_VAR_media_test_members: ${{ secrets.MEDIA_TEST_MEMBERS }}
+        run: |
+          : "${TF_VAR_alert_email:?Set the repository secret ALERT_EMAIL}"
+          infra/ci/tofu-plan.sh staging coachvision-staging-tfstate
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.TOFU_PLAN_WIF_PROVIDER_PRODUCTION }}
+          service_account: ${{ vars.TOFU_PLAN_SA_PRODUCTION }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - id: production
+        name: Plan production
+        env:
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+          # Optional, and separate from staging's: who may read and write production's media
+          # buckets, which hold real users' videos. Unset means nobody.
+          TF_VAR_media_test_members_production: ${{ secrets.MEDIA_TEST_MEMBERS_PRODUCTION }}
+        run: |
+          : "${TF_VAR_alert_email:?Set the repository secret ALERT_EMAIL}"
+          infra/ci/tofu-plan.sh production coachvision-prod-tfstate
+      - name: Publish the summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          report="$RUNNER_TEMP/tofu-summary.md"
+          cat "$report" >>"$GITHUB_STEP_SUMMARY"
+          [ -n "$PR" ] || exit 0
+          marker='<!-- tofu-plan -->'
+          body="$RUNNER_TEMP/tofu-comment.md"
+          printf '%s\n### OpenTofu plan of %s\n\n' "$marker" "$HEAD_SHA" | cat - "$report" >"$body"
+          # One comment per PR, updated on each push. Only the bot's own: anyone can comment on a public repo.
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" --silent
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$body" --silent
+          fi
+
+  # The explicit status checks in the two apply jobs are needed: by default a job is skipped when
+  # any job earlier in its chain was, and deploy-staging is skipped on every merge that doesn't
+  # touch api/ or worker/.
+  tofu-apply-staging:
+    needs: tofu-plan
+    if: >-
+      !cancelled() && needs.tofu-plan.result == 'success' &&
+      github.event_name != 'pull_request' && needs.tofu-plan.outputs.staging != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: infra-staging # deployment branch rule: main only; the merge is the gate
+    concurrency:
+      group: tofu-staging
+      cancel-in-progress: false # never kill an apply halfway
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.TOFU_WIF_PROVIDER }}
+          service_account: ${{ vars.TOFU_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Apply the saved plan
+        env:
+          OBJECT: ${{ needs.tofu-plan.outputs.staging }}
+        run: infra/ci/tofu-apply.sh staging "$OBJECT"
+
+  # Staging first; a plan that changes only production skips staging's job. Its own concurrency
+  # group, not production-deploy: this job can wait days for approval, and that must not hold up a
+  # release.
+  tofu-apply-production:
+    needs: [tofu-plan, tofu-apply-staging]
+    if: >-
+      !cancelled() && needs.tofu-plan.result == 'success' &&
+      (needs.tofu-apply-staging.result == 'success' || needs.tofu-apply-staging.result == 'skipped') &&
+      github.event_name != 'pull_request' && needs.tofu-plan.outputs.production != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: infra-production # required reviewer; deployment branch rule: main only
+    concurrency:
+      group: tofu-production
+      cancel-in-progress: false # never kill an apply halfway
+    permissions:
+      contents: read
+      id-token: write # lets the job request GitHub's OIDC token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.TOFU_WIF_PROVIDER }}
+          service_account: ${{ vars.TOFU_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Apply the saved plan
+        env:
+          OBJECT: ${{ needs.tofu-plan.outputs.production }}
+        run: infra/ci/tofu-apply.sh production "$OBJECT"
+
   # The one check a ruleset should require: passes when every job it needs passed or was skipped by path.
   ci-ok:
     if: always()
-    needs: [changes, test-api, test-worker, build]
+    needs: [changes, test-api, test-worker, build, tofu-plan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -47,6 +47,22 @@ public static class VisionProblem
         return WriteAsync(context, StatusCodes.Status429TooManyRequests, "rate-limited", "Too many requests", "rate_limited", detail, cancellationToken);
     }
 
+    /// <summary>The contract's one generic body for a malformed request body (`400`): unknown
+    /// property, unknown enum value, a field combination the schema refuses, missing or absent
+    /// body.</summary>
+    public static Task WriteInvalidRequestAsync(HttpContext context, string? detail = null, CancellationToken cancellationToken = default) =>
+        WriteAsync(context, StatusCodes.Status400BadRequest, "invalid-request", "Invalid request", "invalid_request", detail, cancellationToken);
+
+    /// <summary>The job exists (for this tenant) but isn't `completed`, so there is no result to
+    /// label yet (`409`).</summary>
+    public static Task WriteJobNotCompletedAsync(HttpContext context, CancellationToken cancellationToken = default) =>
+        WriteAsync(context, StatusCodes.Status409Conflict, "job-not-completed", "Job not completed", "job_not_completed", cancellationToken: cancellationToken);
+
+    /// <summary>No such job for this tenant: never existed, belongs to another tenant, or was
+    /// deleted — the contract requires a client can't tell these apart (`404`).</summary>
+    public static Task WriteNotFoundAsync(HttpContext context, CancellationToken cancellationToken = default) =>
+        WriteAsync(context, StatusCodes.Status404NotFound, "not-found", "Not found", "not_found", cancellationToken: cancellationToken);
+
     public static Task WriteVideoTooLargeAsync(HttpContext context, long limitBytes, CancellationToken cancellationToken = default) =>
         WriteAsync(context, StatusCodes.Status413PayloadTooLarge, "video-too-large", "Video too large", "video_too_large", $"The limit is {limitBytes} bytes.", cancellationToken);
 
