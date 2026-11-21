@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Npgsql" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <!-- Pinned explicitly: Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 otherwise pulls
          Microsoft.EntityFrameworkCore.Relational 10.0.4, which conflicts with the 10.0.15 that
